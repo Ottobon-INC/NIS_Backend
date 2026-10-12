@@ -15,7 +15,12 @@ class ContactUpdate(BaseModel):
 class ContactInDB(BaseModel):
     id: str
     organization_id: str
+    name: Optional[str] = None
     full_name: Optional[str] = None
+    title: Optional[str] = None
+    current_title: Optional[str] = None
+    company: Optional[str] = None
+    current_company: Optional[str] = None
     profile_url: Optional[str] = None
     status: ContactStatus
     created_at: datetime
@@ -23,6 +28,18 @@ class ContactInDB(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ContactOverviewSchema(BaseModel):
+    id: str
+    name: str
+    full_name: Optional[str] = None
+    title: str
+    current_title: Optional[str] = None
+    company: str
+    current_company: Optional[str] = None
+    profile_url: Optional[str] = None
+    status: str
+    lastUpdated: str
 
 class Contact360(BaseModel):
     contact: ContactInDB

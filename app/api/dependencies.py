@@ -1,7 +1,7 @@
 from fastapi import Header, HTTPException, status
 
 async def get_current_user(authorization: str = Header(default=None)):
-    if not authorization or authorization != "Bearer mock-token":
+    if not authorization or authorization not in ["Bearer mock-token", "Bearer mock-admin-token"]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not authenticated"}}

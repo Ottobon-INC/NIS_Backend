@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "networkos"
     POSTGRES_PORT: int = 5432
+    OPENAI_API_KEY: str = ""
 
     @computed_field
     @property
