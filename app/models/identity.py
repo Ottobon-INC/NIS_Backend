@@ -34,3 +34,12 @@ class ExternalIdentity(Base):
     identifier_type = Column(String)
     identifier = Column(String, unique=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class DeletedContact(Base):
+    __tablename__ = "deleted_contacts"
+    id = Column(String, primary_key=True, index=True)
+    organization_id = Column(String, index=True)
+    contact_id = Column(String, nullable=True)
+    name = Column(String, nullable=False)
+    deleted_at = Column(DateTime(timezone=True), server_default=func.now())
+

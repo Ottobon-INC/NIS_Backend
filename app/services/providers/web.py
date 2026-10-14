@@ -60,17 +60,28 @@ class GeneralWebProvider(ResearchProvider):
                     "meta_description": meta_desc,
                     "text_content": text_content[:50000]
                 }
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return {"status": "NOT_FOUND"}
-            elif e.response.status_code in [401, 403]:
-                return {"status": "BLOCKED"}
-            elif e.response.status_code == 429:
-                return {"status": "RATE_LIMITED"}
-            return {"status": "ERROR", "error": f"HTTP {e.response.status_code}"}
-        except httpx.TimeoutException:
-            return {"status": "TIMEOUT"}
         except Exception as e:
+            # Fallback for sites that block automated scraping (e.g. LinkedIn HTTP 999/403)
+            logger.info(f"GeneralWebProvider direct fetch encountered: {e}. Attempting AgentReach search fallback for {url}")
+            try:
+                from app.core.agent_reach_cli import AgentReachCLI
+                import re
+                slug_match = re.search(r'in/([^/?#]+)', url)
+                search_term = slug_match.group(1).replace('-', ' ') if slug_match else url
+                fb = await AgentReachCLI.execute_search("web", f'site:linkedin.com/in/ "{search_term}"')
+                if fb.get("status") == "SUCCESS" and fb.get("data", {}).get("raw_text"):
+                    return {
+                        "status": "SUCCESS",
+                        "final_url": url,
+                        "http_status": 200,
+                        "content_type": "text/plain",
+                        "title": f"Web Footprint for {search_term}",
+                        "meta_description": "",
+                        "text_content": fb["data"]["raw_text"][:30000]
+                    }
+            except Exception as fb_err:
+                logger.warning(f"AgentReach fallback error in GeneralWebProvider: {fb_err}")
+
             return {"status": "ERROR", "error": str(e)}
 
     def search_person(self, query: str): raise NotImplementedError()

@@ -77,7 +77,7 @@ class AgentReachDiscoveryAdapter(DiscoveryAdapter):
             
         tasks = []
         # Generate target tasks for agent-reach
-        for target in ["github", "twitter"]:
+        for target in ["github", "web"]:
             tasks.append({
                 "target_url": query,
                 "agent_reach_target": target,
@@ -86,12 +86,106 @@ class AgentReachDiscoveryAdapter(DiscoveryAdapter):
             })
         return tasks
 
+class GithubDiscoveryAdapter(DiscoveryAdapter):
+    def can_handle(self, source: ResearchSource) -> bool:
+        return source.id == "github"
+        
+    def generate_tasks(self, source: ResearchSource, contact: Contact, identities: List[ExternalIdentity]) -> List[Dict[str, Any]]:
+        query = contact.full_name
+        if not query or query == "Unknown":
+            for ident in identities:
+                if ident.identifier_type == "profile_url":
+                    match = re.search(r'in/([^/?#]+)', ident.identifier)
+                    if match:
+                        query = match.group(1).replace('-', ' ')
+                        break
+        if not query:
+            return []
+        return [{
+            "target_url": query,
+            "query": query,
+            "search_terms": [query],
+            "entity_identifiers": [query]
+        }]
+
+class CompanyWebDiscoveryAdapter(DiscoveryAdapter):
+    def can_handle(self, source: ResearchSource) -> bool:
+        return source.id == "company_web"
+        
+    def generate_tasks(self, source: ResearchSource, contact: Contact, identities: List[ExternalIdentity]) -> List[Dict[str, Any]]:
+        query = contact.full_name
+        company = contact.current_company if contact.current_company and contact.current_company != "Pending research" else ""
+        if not query or query == "Unknown":
+            for ident in identities:
+                if ident.identifier_type == "profile_url":
+                    match = re.search(r'in/([^/?#]+)', ident.identifier)
+                    if match:
+                        query = match.group(1).replace('-', ' ')
+                        break
+        if not query:
+            return []
+        search_target = f"{query} {company}".strip()
+        return [{
+            "target_url": search_target,
+            "query": search_target,
+            "search_terms": [query, company] if company else [query],
+            "entity_identifiers": [query]
+        }]
+
+class NewsPublicDiscoveryAdapter(DiscoveryAdapter):
+    def can_handle(self, source: ResearchSource) -> bool:
+        return source.id == "news_public"
+        
+    def generate_tasks(self, source: ResearchSource, contact: Contact, identities: List[ExternalIdentity]) -> List[Dict[str, Any]]:
+        query = contact.full_name
+        if not query or query == "Unknown":
+            for ident in identities:
+                if ident.identifier_type == "profile_url":
+                    match = re.search(r'in/([^/?#]+)', ident.identifier)
+                    if match:
+                        query = match.group(1).replace('-', ' ')
+                        break
+        if not query:
+            return []
+        return [{
+            "target_url": query,
+            "query": query,
+            "search_terms": [query],
+            "entity_identifiers": [query]
+        }]
+
+class AcademicDiscoveryAdapter(DiscoveryAdapter):
+    def can_handle(self, source: ResearchSource) -> bool:
+        return source.id == "academic_openalex"
+        
+    def generate_tasks(self, source: ResearchSource, contact: Contact, identities: List[ExternalIdentity]) -> List[Dict[str, Any]]:
+        query = contact.full_name
+        if not query or query == "Unknown":
+            for ident in identities:
+                if ident.identifier_type == "profile_url":
+                    match = re.search(r'in/([^/?#]+)', ident.identifier)
+                    if match:
+                        query = match.group(1).replace('-', ' ')
+                        break
+        if not query:
+            return []
+        return [{
+            "target_url": query,
+            "query": query,
+            "search_terms": [query],
+            "entity_identifiers": [query]
+        }]
+
 class SourceDiscoveryService:
     def __init__(self):
         self.adapters: List[DiscoveryAdapter] = [
             GeneralWebAdapter(),
             SearchDiscoveryAdapter(),
             AgentReachDiscoveryAdapter(),
+            GithubDiscoveryAdapter(),
+            CompanyWebDiscoveryAdapter(),
+            NewsPublicDiscoveryAdapter(),
+            AcademicDiscoveryAdapter(),
         ]
         
     def generate_queries(self, source: ResearchSource, contact: Contact, identities: List[ExternalIdentity]) -> List[Dict[str, Any]]:

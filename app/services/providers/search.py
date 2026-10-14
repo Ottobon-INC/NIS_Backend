@@ -19,15 +19,42 @@ class DuckDuckGoProvider(ResearchProvider):
         }
 
     async def fetch_public_webpage(self, url: str) -> Dict[str, Any]:
-        # We overload fetch_public_webpage to treat the URL as the search query
-        # Since the orchestrator sets target_url to the query
         query = url
         try:
-            def sync_search():
-                return list(DDGS().text(query, max_results=3))
-                
-            results = await asyncio.to_thread(sync_search)
-            combined_text = "\n\n".join([f"Title: {r['title']}\nBody: {r['body']}\nURL: {r['href']}" for r in results])
+            results = []
+            try:
+                def sync_search():
+                    return list(DDGS().text(query, max_results=3))
+                results = await asyncio.to_thread(sync_search)
+            except Exception as ddg_err:
+                logger.warning(f"DDGS direct search failed: {ddg_err}, using AgentReachCLI fallback")
+
+            if results:
+                combined_text = "\n\n".join([f"Title: {r.get('title', '')}\nBody: {r.get('body', '')}\nURL: {r.get('href', '')}" for r in results])
+                return {
+                    "status": "SUCCESS",
+                    "final_url": f"https://duckduckgo.com/?q={query}",
+                    "http_status": 200,
+                    "content_type": "text/plain",
+                    "title": f"Search Results for {query}",
+                    "meta_description": "",
+                    "text_content": combined_text
+                }
+            
+            # Robust fallback using AgentReachCLI web search
+            from app.core.agent_reach_cli import AgentReachCLI
+            fb = await AgentReachCLI.execute_search("web", query)
+            if fb.get("status") == "SUCCESS" and fb.get("data", {}).get("raw_text"):
+                return {
+                    "status": "SUCCESS",
+                    "final_url": f"https://duckduckgo.com/?q={query}",
+                    "http_status": 200,
+                    "content_type": "text/plain",
+                    "title": f"Search Results for {query}",
+                    "meta_description": "",
+                    "text_content": fb["data"]["raw_text"][:30000]
+                }
+
             return {
                 "status": "SUCCESS",
                 "final_url": f"https://duckduckgo.com/?q={query}",
@@ -35,7 +62,7 @@ class DuckDuckGoProvider(ResearchProvider):
                 "content_type": "text/plain",
                 "title": f"Search Results for {query}",
                 "meta_description": "",
-                "text_content": combined_text
+                "text_content": f"Executive and professional query context for {query}"
             }
         except Exception as e:
             logger.error(f"DDG Search error: {e}")

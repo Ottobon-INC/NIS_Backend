@@ -19,8 +19,16 @@ class Service(Base):
 class Product(Base):
     __tablename__ = "products"
     id = Column(String, primary_key=True, index=True)
-    name = Column(String)
-    description = Column(Text)
+    name = Column(String, nullable=False)
+    tagline = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    description = Column(Text, nullable=False)
+    features = Column(Text, nullable=True)
+    target_audience = Column(String, nullable=True)
+    business_model = Column(String, nullable=True)
+    status = Column(String, default="ACTIVE")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 class Capability(Base):
     __tablename__ = "capabilities"

@@ -37,6 +37,7 @@ app.add_exception_handler(Exception, global_exception_handler)
 
 # Routers
 app.include_router(api_router, prefix=settings.API_V1_STR)
+app.include_router(api_router, prefix="/api")
 
 @app.get("/health", tags=["health"])
 async def root_health():
