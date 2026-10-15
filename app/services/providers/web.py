@@ -64,6 +64,8 @@ class GeneralWebProvider(ResearchProvider):
                     "text_content": text_content[:50000]
                 }
         except Exception as e:
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 404:
+                return {"status": "NOT_FOUND", "error": str(e)}
             # Fallback for sites that block automated scraping (e.g. LinkedIn HTTP 999/403)
             logger.info(f"GeneralWebProvider direct fetch encountered: {e}. Attempting AgentReach search fallback for {url}")
             try:

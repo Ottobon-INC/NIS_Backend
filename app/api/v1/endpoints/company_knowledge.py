@@ -22,7 +22,7 @@ def create_crud_router(model_class, schema_create, schema_update, schema_respons
         
     @r.post("", response_model=schema_response)
     @r.post("/", response_model=schema_response)
-    async def create_item(item: schema_create, db: AsyncSession = Depends(get_db), user: dict = Depends(get_current_user)):
+    async def create_item(item: schema_create, db: AsyncSession = Depends(get_db), user: dict = Depends(get_current_user)):  # type: ignore
         obj = model_class(id=str(uuid.uuid4()), **item.model_dump())
         db.add(obj)
         await db.commit()
@@ -37,7 +37,7 @@ def create_crud_router(model_class, schema_create, schema_update, schema_respons
         return obj
         
     @r.put("/{item_id}", response_model=schema_response)
-    async def update_item(item_id: str, item: schema_update, db: AsyncSession = Depends(get_db), user: dict = Depends(get_current_user)):
+    async def update_item(item_id: str, item: schema_update, db: AsyncSession = Depends(get_db), user: dict = Depends(get_current_user)):  # type: ignore
         res = await db.execute(select(model_class).where(model_class.id == item_id))
         obj = res.scalars().first()
         if not obj: raise HTTPException(404, detail={"success": False, "error": {"code": "NOT_FOUND", "message": "Item not found"}})

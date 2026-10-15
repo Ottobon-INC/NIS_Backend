@@ -669,10 +669,10 @@ async def restore_contact(
             if snap.get("linkedin_url"):
                 recovered_url = snap.get("linkedin_url")
             # Ensure metadata links to target_id
-            if not sr.metadata_:
-                sr.metadata_ = {"contact_id": target_id}
-            elif sr.metadata_.get("contact_id") != target_id:
-                sr.metadata_["contact_id"] = target_id
+            curr_meta = dict(sr.metadata_) if sr.metadata_ else {}
+            if curr_meta.get("contact_id") != target_id:
+                curr_meta["contact_id"] = target_id
+                sr.metadata_ = curr_meta
             break
 
     restored = Contact(

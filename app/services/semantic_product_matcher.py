@@ -713,8 +713,11 @@ Evaluate whether any of our products are suitable solutions. Choose strictly one
         ])
 
         chain = prompt | llm.with_structured_output(SemanticProductMatchResponse)
-        res = await chain.ainvoke({})
-        if res:
+        raw_res = await chain.ainvoke({})
+        if raw_res:
+            res: SemanticProductMatchResponse = (
+                SemanticProductMatchResponse(**raw_res) if isinstance(raw_res, dict) else raw_res
+            )
             res.connection_id = connection_id
             res.connection_name = connection_name or "Connection"
             res.connection_company = connection_company

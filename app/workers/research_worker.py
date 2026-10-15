@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import uuid
+from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -93,12 +94,12 @@ async def execute_task(task_id: str):
         provider = PROVIDER_REGISTRY[source.id]
         
         try:
-            target_url = task.target_metadata.get("target_url") if task.target_metadata else None
-            
-            agent_reach_target = task.target_metadata.get("agent_reach_target") if task.target_metadata else None
+            target_meta: Dict[str, Any] = getattr(task, "target_metadata", None) or {}
+            target_url = target_meta.get("target_url")
+            agent_reach_target = target_meta.get("agent_reach_target")
             
             if agent_reach_target and hasattr(provider, "search_target"):
-                search_query = str(target_url or (task.target_metadata.get("query") if task.target_metadata else "") or "")
+                search_query = str(target_url or target_meta.get("query") or "")
                 result = await provider.search_target(agent_reach_target, search_query)
             elif target_url and hasattr(provider, "fetch_public_webpage"):
                 result = await provider.fetch_public_webpage(target_url)
