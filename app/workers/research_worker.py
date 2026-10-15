@@ -98,7 +98,8 @@ async def execute_task(task_id: str):
             agent_reach_target = task.target_metadata.get("agent_reach_target") if task.target_metadata else None
             
             if agent_reach_target and hasattr(provider, "search_target"):
-                result = await provider.search_target(agent_reach_target, target_url)
+                search_query = str(target_url or (task.target_metadata.get("query") if task.target_metadata else "") or "")
+                result = await provider.search_target(agent_reach_target, search_query)
             elif target_url and hasattr(provider, "fetch_public_webpage"):
                 result = await provider.fetch_public_webpage(target_url)
             else:

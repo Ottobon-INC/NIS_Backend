@@ -195,7 +195,7 @@ class ProblemMatcherService:
                 catalog["capabilities"][c.id] = c.name
         except Exception as e:
             logger.warning(f"ProblemMatcher: Failed to load catalog from DB ({e}), using default verified catalog.")
-            return cls._load_approved_catalog(None)
+            return await cls._load_approved_catalog(None)
 
         return catalog
 

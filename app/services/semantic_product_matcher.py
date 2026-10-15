@@ -25,7 +25,7 @@ class SemanticProductMatcherService:
     """
 
     # Canonical product catalog containing ONLY our authentic application products
-    PRODUCT_CATALOG = [
+    PRODUCT_CATALOG: List[Dict[str, Any]] = [
         {
             "id": "prod-janmasethu",
             "name": "JanmaSethu",
@@ -501,7 +501,7 @@ class SemanticProductMatcherService:
                     matched_domains.append(pd)
                     score += 25
 
-            if connection_company and connection_company.lower() in prod["name"].lower():
+            if connection_company and connection_company.lower() in str(prod["name"]).lower():
                 score += 30
             if context and context.get("industry"):
                 ind_lower = context["industry"].lower()
@@ -514,7 +514,7 @@ class SemanticProductMatcherService:
                 alignment = "STRONG" if final_score >= 75 else "MODERATE" if final_score >= 60 else "WEAK"
                 relevant_features = prod["key_features"][:3]
                 why_solves = (
-                    f"{prod['name']} directly addresses this through its {prod['key_features'][0].lower()} "
+                    f"{prod['name']} directly addresses this through its {str(prod['key_features'][0]).lower()} "
                     f"and purpose-built capabilities for {prod['category']}."
                 )
 
@@ -546,7 +546,7 @@ class SemanticProductMatcherService:
             evidence_list.append(f"Role: {connection_title}")
 
         if not viable_matches:
-            catalog_names = ", ".join(p["name"] for p in cls.PRODUCT_CATALOG)
+            catalog_names = ", ".join(str(p["name"]) for p in cls.PRODUCT_CATALOG)
             return SemanticProductMatchResponse(
                 connection_id=connection_id,
                 connection_name=connection_name or "Connection",

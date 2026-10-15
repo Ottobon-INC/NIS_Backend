@@ -1,9 +1,12 @@
+import logging
 import httpx
 from bs4 import BeautifulSoup
 from typing import Dict, Any, Optional
 from app.services.providers.base import ResearchProvider
 from app.services.web.url_security import validate_url_security, SSRError
 from app.core.config import settings
+
+logger = logging.getLogger("networkos.web_provider")
 
 class GeneralWebProvider(ResearchProvider):
     def get_provider_metadata(self) -> Dict[str, Any]:
