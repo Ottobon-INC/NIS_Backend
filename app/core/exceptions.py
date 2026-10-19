@@ -1,3 +1,4 @@
+from typing import Any
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -6,7 +7,7 @@ import logging
 
 logger = logging.getLogger("networkos")
 
-async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
+async def custom_validation_exception_handler(request: Request, exc: Any):
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
@@ -14,12 +15,12 @@ async def custom_validation_exception_handler(request: Request, exc: RequestVali
             "error": {
                 "code": "VALIDATION_ERROR",
                 "message": "Invalid request parameters",
-                "details": exc.errors()
+                "details": exc.errors() if hasattr(exc, "errors") else str(exc)
             }
         },
     )
 
-async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+async def sqlalchemy_exception_handler(request: Request, exc: Any):
     logger.error(f"Database error: {str(exc)}")
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

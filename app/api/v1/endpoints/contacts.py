@@ -7,7 +7,7 @@ import uuid
 import re
 
 from app.db.session import get_db
-from app.models.identity import Contact, ExternalIdentity
+from app.models.identity import Contact, ExternalIdentity, ContactType
 from app.models.orchestration import ResearchRun, ResearchTask
 from app.schemas.contacts import ContactCreateURL, ContactInDB, ContactUpdate, Contact360, ContactOverviewSchema
 from app.api.dependencies import get_current_user
@@ -69,6 +69,7 @@ async def create_contact_from_linkedin(
         new_contact = Contact(
             id=contact_id,
             organization_id=user["organization_id"],
+            contact_type=ContactType.TARGET,
             profile_url=normalized_url,
             full_name=initial_name,
             current_title="Analyzing profile...",
@@ -96,11 +97,20 @@ async def create_contact_from_linkedin(
 @router.get("", response_model=List[ContactOverviewSchema])
 async def list_contacts(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),
+    contact_type: str = Query(ContactType.TARGET, description="Filter by TARGET or BHANU_CONNECTION"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    stmt = select(Contact).where(Contact.organization_id == user["organization_id"]).offset(skip).limit(limit)
+    stmt = (
+        select(Contact)
+        .where(
+            Contact.organization_id == user["organization_id"],
+            Contact.contact_type == contact_type
+        )
+        .offset(skip)
+        .limit(limit)
+    )
     res = await db.execute(stmt)
     contacts = res.scalars().all()
     

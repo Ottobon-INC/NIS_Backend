@@ -1,7 +1,7 @@
+import enum
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Enum, JSON
 from sqlalchemy.sql import func
 from app.db.base import Base
-import enum
 
 class RunStatus(str, enum.Enum):
     NOT_STARTED = "NOT_STARTED"

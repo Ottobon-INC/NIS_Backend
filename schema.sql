@@ -27,23 +27,43 @@ CREATE INDEX ix_research_sources_id ON research_sources (id);
 CREATE TABLE contacts (
 	id VARCHAR NOT NULL, 
 	organization_id VARCHAR, 
+	contact_type VARCHAR NOT NULL DEFAULT 'TARGET',
 	first_name VARCHAR, 
 	last_name VARCHAR, 
 	full_name VARCHAR, 
 	current_title VARCHAR, 
 	current_company VARCHAR, 
+	company_website VARCHAR,
 	email VARCHAR, 
 	phone VARCHAR, 
 	location VARCHAR, 
 	profile_url VARCHAR, 
 	profile_image_url VARCHAR, 
 	status contactstatus, 
+	card_status VARCHAR DEFAULT 'PROCESSING',
+	admin_notes TEXT,
+	reviewed_by VARCHAR,
+	founder_reviewed BOOLEAN DEFAULT FALSE,
+	founder_notes TEXT,
+	founder_reviewed_at TIMESTAMP WITH TIME ZONE,
+	best_route JSONB,
+	relationship_strength INTEGER,
+	reachability VARCHAR,
+	best_channel VARCHAR,
+	relationship_notes TEXT,
+	connected_since DATE,
+	is_scored BOOLEAN DEFAULT FALSE,
+	import_batch_id VARCHAR,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now(), 
 	updated_at TIMESTAMP WITH TIME ZONE, 
 	PRIMARY KEY (id)
 );
 CREATE INDEX ix_contacts_id ON contacts (id);
 CREATE INDEX ix_contacts_organization_id ON contacts (organization_id);
+CREATE INDEX ix_contacts_contact_type ON contacts (contact_type);
+CREATE INDEX ix_contacts_card_status ON contacts (card_status);
+CREATE INDEX ix_contacts_is_scored ON contacts (is_scored);
+CREATE INDEX ix_contacts_import_batch_id ON contacts (import_batch_id);
 
 CREATE TABLE company_profiles (
 	id VARCHAR NOT NULL, 

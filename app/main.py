@@ -35,8 +35,10 @@ app.add_exception_handler(RequestValidationError, custom_validation_exception_ha
 app.add_exception_handler(SQLAlchemyError, sqlalchemy_exception_handler)
 app.add_exception_handler(Exception, global_exception_handler)
 
-# Routers
-app.include_router(api_router, prefix=settings.API_V1_STR)
+# Mount central API router under both standard versioned path and legacy unversioned path
+# This allows all 3 streams to develop independently without modifying main.py
+app.include_router(api_router, prefix=settings.API_V1_STR)  # /api/v1/...
+app.include_router(api_router, prefix="/api")              # /api/...
 
 @app.get("/health", tags=["health"])
 async def root_health():
