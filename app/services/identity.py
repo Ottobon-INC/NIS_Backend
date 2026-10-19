@@ -18,25 +18,62 @@ class IdentityResolver:
         if not contact:
             return
             
+        import re
+        target_slug = ""
+        if contact.profile_url:
+            m = re.search(r'in/([^/?#]+)', contact.profile_url)
+            if m:
+                target_slug = m.group(1).strip().lower()
+
+        # Check if source_result points to a conflicting LinkedIn slug
+        raw_ref = source_result.raw_reference or ""
+        if target_slug and "linkedin.com/in/" in raw_ref:
+            ref_slug_match = re.search(r'in/([^/?#]+)', raw_ref)
+            if ref_slug_match:
+                ref_slug = ref_slug_match.group(1).strip().lower()
+                if ref_slug != target_slug and ref_slug.replace("-", "") != target_slug.replace("-", ""):
+                    logger.warning(f"IdentityResolver: Discarding conflicting LinkedIn profile {ref_slug} for target {target_slug}")
+                    return
+
         data = source_result.extracted_data or {}
         
-        # Simple extraction logic (mocking advanced NLP for now)
-        title = data.get("title", "")
-        text = data.get("text", "")
-        
-        updated = False
-        full_name = None
-        current_title = None
-        current_company = None
-        
-        if title:
-            parts = title.split("-")
-            if len(parts) > 0:
-                full_name = parts[0].strip()
-            if len(parts) > 1:
-                current_title = parts[1].strip()
-            if len(parts) > 2:
-                current_company = parts[2].split("|")[0].strip()
+        # Check for structured LinkedIn direct scrape data
+        if data.get("name") and data.get("company"):
+            full_name = data["name"]
+            current_title = data.get("role") or "Professional"
+            current_company = data.get("company") or "Independent"
+            if data.get("location"):
+                contact.location = data["location"]
+            if data.get("image_url"):
+                contact.profile_image_url = data["image_url"]
+            if full_name and full_name != "Unknown":
+                contact.full_name = full_name
+                parts = full_name.split()
+                contact.first_name = parts[0] if parts else ""
+                contact.last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
+            if current_title:
+                contact.current_title = current_title
+            if current_company:
+                contact.current_company = current_company
+            updated = True
+        else:
+            # Simple extraction logic (mocking advanced NLP for now)
+            title = data.get("title", "")
+            text = data.get("text", "")
+            
+            updated = False
+            full_name = None
+            current_title = None
+            current_company = None
+            
+            if title:
+                parts = title.split("-")
+                if len(parts) > 0:
+                    full_name = parts[0].strip()
+                if len(parts) > 1:
+                    current_title = parts[1].strip()
+                if len(parts) > 2:
+                    current_company = parts[2].split("|")[0].strip()
 
         # Handle agent-reach search results
         if source_result.source_id == "agent_reach" and "raw_data" in data:

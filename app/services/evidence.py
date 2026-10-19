@@ -63,6 +63,18 @@ class EvidenceEngine:
     @staticmethod
     async def process_run_and_extract_snapshot(db: AsyncSession, run_id: str, contact_id: str):
         logger.info(f"EvidenceEngine: Starting extraction for run {run_id}")
+        import re
+        
+        # Get target contact context
+        from app.models.identity import Contact, ContactStatus
+        contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalars().first()
+        target_name = contact.full_name if contact else "Contact"
+        target_url = contact.profile_url if contact else ""
+        target_slug = ""
+        if target_url:
+            m = re.search(r'in/([^/?#]+)', target_url)
+            if m:
+                target_slug = m.group(1).strip()
         
         # Get all source results for this run
         from app.models.orchestration import ResearchTask
@@ -74,48 +86,83 @@ class EvidenceEngine:
             
         results = (await db.execute(select(SourceResult).where(SourceResult.research_task_id.in_(task_ids)))).scalars().all()
         
+        # Sort results so that direct profile scraping (general_web) comes FIRST
+        def sort_key(r):
+            txt = (r.extracted_data or {}).get("text_content", "") or (r.extracted_data or {}).get("text", "")
+            return 0 if ("PRIMARY VERIFIED SOURCE" in txt or r.source_id == "general_web") else 1
+
+        sorted_results = sorted(results, key=sort_key)
+        
         combined_text = ""
         unique_sources = []
-        for r in results:
+        for r in sorted_results:
             ref = r.raw_reference or r.query
+            text_snippet = ""
+            if r.extracted_data and r.extracted_data.get("text"):
+                text_snippet = r.extracted_data['text']
+            elif r.extracted_data and r.extracted_data.get("text_content"):
+                text_snippet = r.extracted_data['text_content']
+            elif r.extracted_data and r.extracted_data.get("raw_data") and isinstance(r.extracted_data.get("raw_data"), dict) and "raw_text" in r.extracted_data["raw_data"]:
+                text_snippet = r.extracted_data["raw_data"]["raw_text"]
+                
+            # Filter out search results from completely different LinkedIn profile handles
+            if target_slug and ("linkedin.com/in/" in text_snippet or "linkedin.com/in/" in (ref or "")):
+                other_slugs = re.findall(r'linkedin\.com/in/([^/?#\s"\']+)', f"{ref} {text_snippet}")
+                has_conflicting_profile = False
+                for os in other_slugs:
+                    clean_os = os.lower().strip()
+                    clean_target = target_slug.lower().strip()
+                    if clean_os != clean_target and clean_os.replace("-", "") != clean_target.replace("-", ""):
+                        has_conflicting_profile = True
+                        break
+                if has_conflicting_profile:
+                    logger.warning(f"Discarding conflicting LinkedIn profile search result: {ref} (conflicts with target slug {target_slug})")
+                    continue
+
             if ref and not any(s["reference"] == ref for s in unique_sources):
                 unique_sources.append({
                     "source_id": r.source_id,
                     "reference": ref,
                     "status": r.status
                 })
-            if r.extracted_data and r.extracted_data.get("text"):
-                combined_text += f"\n--- Source: {r.raw_reference} ---\n{r.extracted_data['text']}\n"
-            elif r.extracted_data and r.extracted_data.get("text_content"):
-                combined_text += f"\n--- Source: {r.raw_reference} ---\n{r.extracted_data['text_content']}\n"
-            elif r.extracted_data and r.extracted_data.get("raw_data") and isinstance(r.extracted_data.get("raw_data"), dict) and "raw_text" in r.extracted_data["raw_data"]:
-                combined_text += f"\n--- Source: {r.raw_reference} ---\n{r.extracted_data['raw_data']['raw_text']}\n"
+            if text_snippet:
+                combined_text += f"\n--- Source: {ref} ---\n{text_snippet}\n"
                 
         if not combined_text.strip():
             logger.warning("No text found in source results to run Evidence Engine. Attempting direct web search fallback...")
-            from app.models.identity import Contact
-            c_row = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalars().first()
-            if c_row:
-                search_query = c_row.full_name or "Professional"
+            if contact:
+                search_query = contact.full_name or "Professional"
+                query_term = f'"{target_slug}"' if target_slug else f'"{search_query}"'
                 from app.core.agent_reach_cli import AgentReachCLI
-                fb = await AgentReachCLI.execute_search("web", f'"{search_query}" profile executive')
+                fb = await AgentReachCLI.execute_search("web", query_term)
                 if fb.get("status") == "SUCCESS" and fb.get("data", {}).get("raw_text"):
                     combined_text = fb["data"]["raw_text"]
                     unique_sources.append({
                         "source_id": "duckduckgo",
-                        "reference": f"https://duckduckgo.com/?q={search_query}",
+                        "reference": f"https://duckduckgo.com/?q={query_term}",
                         "status": "SUCCESS"
                     })
                 else:
-                    combined_text = f"Contact Profile Name: {c_row.full_name}, Profile URL: {c_row.profile_url}"
+                    combined_text = f"Contact Profile Name: {contact.full_name}, Profile URL: {contact.profile_url}"
 
         logger.info(f"Extracting intelligence from {len(combined_text)} characters of text across {len(unique_sources)} sources...")
         
         try:
             llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, api_key=settings.OPENAI_API_KEY)
             
-            system_prompt = """You are an elite commercial opportunity intelligence analyst for Ottobon / NetworkOS.
+            system_prompt = f"""You are an elite commercial opportunity intelligence analyst for Ottobon / NetworkOS.
 Your job is to transform raw scraped web and profile data into an actionable, evidence-based Commercial Opportunity Intelligence Report.
+
+TARGET CANDIDATE GROUNDING:
+- Target Name: {target_name}
+- Target Profile URL: {target_url}
+- Target LinkedIn Slug: {target_slug}
+
+CRITICAL IDENTITY VERIFICATION & DISAMBIGUATION RULES:
+1. STRICT PRIMARY SOURCE GROUNDING: If a "PRIMARY VERIFIED SOURCE - DIRECT LINKEDIN PROFILE SCRAPED" block is present in the text, you MUST ground the person's name, current role, current organization, location, and education strictly on this primary verified source. It completely overrides any conflicting web search snippets.
+2. STRICT TARGET IDENTITY: You must ONLY extract intelligence that corresponds to the specific target individual identified by Target Profile URL '{target_url}' (Name: '{target_name}', Slug: '{target_slug}').
+3. DISCARD UNRELATED INDIVIDUALS / NAME COLLISIONS: The search results may contain entries for entirely different people who share a similar name. You MUST strictly IGNORE and DISCARD any information belonging to these distinct individuals.
+4. Report the person's true role, organization, and location based ONLY on the verified individual matching the target profile.
 
 We operate on an X → Y relationship intelligence framework.
 Network Intelligence is not merely a biography-research system; it is a commercial opportunity intelligence system.

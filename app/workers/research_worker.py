@@ -161,18 +161,24 @@ async def mock_research_background_task(run_id: str):
             res = await db.execute(select(ResearchTask).where(ResearchTask.research_run_id == run_id, ResearchTask.status == TaskStatus.PENDING))
             tasks = res.scalars().all()
             
-        for task in tasks:
+        async def safe_execute(tid):
             try:
-                await execute_task(task.id)
+                await execute_task(tid)
             except Exception as task_err:
-                logger.error(f"Task {task.id} failed with error: {task_err}")
+                logger.error(f"Task {tid} failed with error: {task_err}")
+
+        if tasks:
+            await asyncio.gather(*[safe_execute(t.id) for t in tasks])
             
         async with AsyncSessionLocal() as db:
             run_res = await db.execute(select(ResearchRun).where(ResearchRun.id == run_id))
             run = run_res.scalars().first()
             if run:
-                # Trigger Evidence Engine
-                await EvidenceEngine.process_run_and_extract_snapshot(db, run_id, run.contact_id)
+                try:
+                    # Trigger Evidence Engine
+                    await EvidenceEngine.process_run_and_extract_snapshot(db, run_id, run.contact_id)
+                except Exception as ev_err:
+                    logger.error(f"EvidenceEngine extraction error in worker: {ev_err}")
                 
                 run.status = RunStatus.COMPLETED
                 run.completed_at = datetime.now(timezone.utc)

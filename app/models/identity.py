@@ -23,6 +23,9 @@ class Contact(Base):
     profile_url = Column(String)
     profile_image_url = Column(String)
     status = Column(Enum(ContactStatus), default=ContactStatus.NEW)
+    contact_type = Column(String, default="TARGET_PROSPECT", nullable=False)
+    card_status = Column(String, nullable=True)
+    admin_notes = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

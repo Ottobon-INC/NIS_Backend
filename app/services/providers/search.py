@@ -1,6 +1,9 @@
 from typing import Dict, Any, Optional
 from app.services.providers.base import ResearchProvider
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
 import logging
 import asyncio
 
@@ -24,7 +27,8 @@ class DuckDuckGoProvider(ResearchProvider):
             results = []
             try:
                 def sync_search():
-                    return list(DDGS().text(query, max_results=3))
+                    with DDGS() as ddgs:
+                        return list(ddgs.text(query, max_results=5))
                 results = await asyncio.to_thread(sync_search)
             except Exception as ddg_err:
                 logger.warning(f"DDGS direct search failed: {ddg_err}, using AgentReachCLI fallback")

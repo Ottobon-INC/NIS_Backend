@@ -22,7 +22,14 @@ async def get_dashboard(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    contacts_count = len((await db.execute(select(Contact.id).where(Contact.organization_id == user["organization_id"]))).scalars().all())
+    valid_contacts = (await db.execute(
+        select(Contact.id).where(
+            Contact.organization_id == user["organization_id"],
+            Contact.full_name.isnot(None),
+            Contact.full_name != "Unknown"
+        )
+    )).scalars().all()
+    contacts_count = len(valid_contacts)
     return {
         "stats": {
             "actionRequired": 3,
@@ -529,24 +536,77 @@ async def get_network_graph(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    contacts = (await db.execute(select(Contact).where(Contact.organization_id == user["organization_id"]))).scalars().all()
+    contacts = (await db.execute(
+        select(Contact).where(
+            Contact.organization_id == user["organization_id"],
+            Contact.full_name.isnot(None),
+            Contact.full_name != "Unknown",
+            Contact.full_name != ""
+        )
+    )).scalars().all()
+
     nodes = [
         {"id": "node-ottobon", "label": "Ottobon Founder", "type": "FOUNDER", "cluster": "core"}
     ]
     edges = []
+    
+    seen_people = {}
+    seen_companies = set()
+
     for c in contacts:
+        name = (c.full_name or "").strip()
+        if not name or name in ("Unknown", "Unknown Contact", "Contact"):
+            continue
+        if c.id and (c.id.startswith("test-conflict") or c.id.startswith("test-assump") or c.id.startswith("test-uncert")):
+            continue
+        
+        norm_name = name.lower()
+        if norm_name in seen_people:
+            existing = seen_people[norm_name]
+            if (c.current_company and c.current_company != "Independent") and (not existing.current_company or existing.current_company == "Independent"):
+                seen_people[norm_name] = c
+        else:
+            seen_people[norm_name] = c
+
+    for norm_name, c in seen_people.items():
+        person_name = c.full_name.strip()
+        company = (c.current_company or "Independent").strip()
+
+        # Add Person node
         nodes.append({
             "id": c.id,
-            "label": c.full_name or "Contact",
-            "type": "EXECUTIVE",
-            "cluster": c.current_company or "Enterprise"
+            "label": person_name,
+            "type": "PERSON",
+            "cluster": company
         })
+        # Add edge between Founder and Person
         edges.append({
             "source": "node-ottobon",
             "target": c.id,
+            "label": "Strategic Target",
             "relationship": "STRATEGIC_TARGET",
             "strength": 85
         })
+
+        # Add Company node and edge if valid company
+        if company and company not in ("Independent", "None", "Unknown"):
+            company_id = f"company-{company.lower().replace(' ', '-')}"
+            if company not in seen_companies:
+                seen_companies.add(company)
+                nodes.append({
+                    "id": company_id,
+                    "label": company,
+                    "type": "COMPANY",
+                    "cluster": company
+                })
+            # Add edge between Person and Company
+            edges.append({
+                "source": c.id,
+                "target": company_id,
+                "label": c.current_title or "Executive",
+                "relationship": "AFFILIATION",
+                "strength": 90
+            })
 
     return {"nodes": nodes, "edges": edges}
 

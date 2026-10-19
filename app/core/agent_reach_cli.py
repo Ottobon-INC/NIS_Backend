@@ -39,7 +39,7 @@ class AgentReachCLI:
             return {"installed": False, "supported_targets": []}
             
     @staticmethod
-    async def execute_search(target: str, query: str, timeout: float = 30.0) -> dict:
+    async def execute_search(target: str, query: str, timeout: float = 5.0) -> dict:
         """
         Executes 'agent-reach search --target <target> <query>' safely.
         """
