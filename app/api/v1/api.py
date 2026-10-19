@@ -13,6 +13,9 @@ from app.api.v1.endpoints import (
     network,
     introductions,
     cockpit,
+    # Matching & Platform
+    matching,
+    platform,
 )
 
 api_router = APIRouter()
@@ -29,8 +32,10 @@ api_router.include_router(research.router, prefix="/research", tags=["research"]
 api_router.include_router(opportunities.router, prefix="/opportunities", tags=["opportunities"])
 api_router.include_router(meetings.router, prefix="/meetings", tags=["meetings"])
 api_router.include_router(company_knowledge.router, prefix="/knowledge", tags=["company knowledge"])
+api_router.include_router(matching.router, prefix="/matching", tags=["problem matching"])
 
 # Stream 3: Network Graph, Introductions & Decision Cockpit
 api_router.include_router(network.router, prefix="/network", tags=["network"])
 api_router.include_router(introductions.router, prefix="/introductions", tags=["introductions"])
 api_router.include_router(cockpit.router, prefix="/cockpit", tags=["founder cockpit"])
+api_router.include_router(platform.router, tags=["platform"])

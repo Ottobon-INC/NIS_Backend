@@ -61,11 +61,6 @@ class Contact(Base):
     founder_reviewed_at = Column(DateTime(timezone=True))
 
     # --- Route (TARGET only) ---
-    # Stores the best matched route as JSONB — sufficient for V1 single-hop routing.
-    # Shape: { "route_type": "COMPANY_MATCH", "via_contact_id": "abc",
-    #          "via_name": "Priya Sharma", "via_title": "VP Ops",
-    #          "via_company": "Global Logistics", "confidence": 0.85,
-    #          "reasoning": "Works in same division as target" }
     best_route = Column(JSONB)
 
     # --- Bhanu's relationship context (BHANU_CONNECTION only) ---
@@ -78,7 +73,6 @@ class Contact(Base):
     connected_since = Column(Date)                      # "Connected On" from LinkedIn CSV
     is_scored = Column(Boolean, default=False, index=True)  # has admin scored this yet?
     import_batch_id = Column(String, index=True)        # which CSV upload session
-
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -91,3 +85,12 @@ class ExternalIdentity(Base):
     identifier_type = Column(String)
     identifier = Column(String, unique=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class DeletedContact(Base):
+    __tablename__ = "deleted_contacts"
+    id = Column(String, primary_key=True, index=True)
+    organization_id = Column(String, index=True)
+    contact_id = Column(String, nullable=True)
+    name = Column(String, nullable=False)
+    deleted_at = Column(DateTime(timezone=True), server_default=func.now())
+

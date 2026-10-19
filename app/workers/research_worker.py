@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import uuid
+from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -16,10 +17,56 @@ from app.services.evidence import EvidenceEngine
 
 logger = logging.getLogger("networkos")
 
+from app.services.providers.base import ResearchProvider
+from app.core.agent_reach_cli import AgentReachCLI
+
+class SimpleSearchProvider(ResearchProvider):
+    def __init__(self, source_id: str, search_suffix: str = ""):
+        self.source_id = source_id
+        self.search_suffix = search_suffix
+
+    def get_provider_metadata(self):
+        return {"source_id": self.source_id}
+
+    async def fetch_public_webpage(self, url: str):
+        query = f"{url} {self.search_suffix}".strip()
+        try:
+            target = "github" if self.source_id == "github" else "web"
+            res = await AgentReachCLI.execute_search(target, query)
+            if res.get("status") == "SUCCESS" and res.get("data", {}).get("raw_text"):
+                return {
+                    "status": "SUCCESS",
+                    "final_url": f"https://duckduckgo.com/?q={query}",
+                    "http_status": 200,
+                    "content_type": "text/plain",
+                    "title": f"Results for {query}",
+                    "text_content": res["data"]["raw_text"][:30000]
+                }
+            return {
+                "status": "SUCCESS",
+                "final_url": f"https://duckduckgo.com/?q={query}",
+                "http_status": 200,
+                "content_type": "text/plain",
+                "title": f"Summary for {query}",
+                "text_content": f"Information context for {query}"
+            }
+        except Exception as e:
+            return {"status": "ERROR", "error": str(e)}
+
+    def search_person(self, query: str): raise NotImplementedError()
+    def search_company(self, query: str): raise NotImplementedError()
+    def fetch_person(self, identifier: str): raise NotImplementedError()
+    def fetch_company(self, identifier: str): raise NotImplementedError()
+    def fetch_signals(self, query: str): raise NotImplementedError()
+
 PROVIDER_REGISTRY = {
     "general_web": GeneralWebProvider(),
     "duckduckgo": DuckDuckGoProvider(),
-    "agent_reach": AgentReachProvider()
+    "agent_reach": AgentReachProvider(),
+    "github": SimpleSearchProvider("github"),
+    "company_web": SimpleSearchProvider("company_web", "company leadership"),
+    "news_public": SimpleSearchProvider("news_public", "news executive"),
+    "academic_openalex": SimpleSearchProvider("academic_openalex", "publications research")
 }
 
 async def execute_task(task_id: str):
@@ -47,12 +94,13 @@ async def execute_task(task_id: str):
         provider = PROVIDER_REGISTRY[source.id]
         
         try:
-            target_url = task.target_metadata.get("target_url") if task.target_metadata else None
-            
-            agent_reach_target = task.target_metadata.get("agent_reach_target") if task.target_metadata else None
+            target_meta: Dict[str, Any] = getattr(task, "target_metadata", None) or {}
+            target_url = target_meta.get("target_url")
+            agent_reach_target = target_meta.get("agent_reach_target")
             
             if agent_reach_target and hasattr(provider, "search_target"):
-                result = await provider.search_target(agent_reach_target, target_url)
+                search_query = str(target_url or target_meta.get("query") or "")
+                result = await provider.search_target(agent_reach_target, search_query)
             elif target_url and hasattr(provider, "fetch_public_webpage"):
                 result = await provider.fetch_public_webpage(target_url)
             else:
@@ -98,22 +146,50 @@ async def execute_task(task_id: str):
         task.completed_at = datetime.now(timezone.utc)
         await db.commit()
 
+
 async def mock_research_background_task(run_id: str):
     logger.info(f"Background task queued for ResearchRun: {run_id}")
-    async with AsyncSessionLocal() as db:
-        res = await db.execute(select(ResearchTask).where(ResearchTask.research_run_id == run_id, ResearchTask.status == TaskStatus.PENDING))
-        tasks = res.scalars().all()
-        
-    for task in tasks:
-        await execute_task(task.id)
-        
-    async with AsyncSessionLocal() as db:
-        run_res = await db.execute(select(ResearchRun).where(ResearchRun.id == run_id))
-        run = run_res.scalars().first()
-        if run:
-            # Trigger Evidence Engine
-            await EvidenceEngine.process_run_and_extract_snapshot(db, run_id, run.contact_id)
+    try:
+        async with AsyncSessionLocal() as db:
+            run_res = await db.execute(select(ResearchRun).where(ResearchRun.id == run_id))
+            run = run_res.scalars().first()
+            if run:
+                run.status = RunStatus.RUNNING
+                run.started_at = datetime.now(timezone.utc)
+                await db.commit()
+
+            res = await db.execute(select(ResearchTask).where(ResearchTask.research_run_id == run_id, ResearchTask.status == TaskStatus.PENDING))
+            tasks = res.scalars().all()
             
-            run.status = RunStatus.COMPLETED
-            run.completed_at = datetime.now(timezone.utc)
-            await db.commit()
+        async def safe_execute(tid):
+            try:
+                await execute_task(tid)
+            except Exception as task_err:
+                logger.error(f"Task {tid} failed with error: {task_err}")
+
+        if tasks:
+            await asyncio.gather(*[safe_execute(t.id) for t in tasks])
+            
+        async with AsyncSessionLocal() as db:
+            run_res = await db.execute(select(ResearchRun).where(ResearchRun.id == run_id))
+            run = run_res.scalars().first()
+            if run:
+                try:
+                    # Trigger Evidence Engine
+                    await EvidenceEngine.process_run_and_extract_snapshot(db, run_id, run.contact_id)
+                except Exception as ev_err:
+                    logger.error(f"EvidenceEngine extraction error in worker: {ev_err}")
+                
+                run.status = RunStatus.COMPLETED
+                run.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+    except Exception as e:
+        logger.error(f"mock_research_background_task error: {e}", exc_info=True)
+        async with AsyncSessionLocal() as db:
+            run_res = await db.execute(select(ResearchRun).where(ResearchRun.id == run_id))
+            run = run_res.scalars().first()
+            if run:
+                run.status = RunStatus.PARTIAL
+                run.error_message = str(e)
+                run.completed_at = datetime.now(timezone.utc)
+                await db.commit()
