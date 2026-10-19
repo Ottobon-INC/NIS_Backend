@@ -12,7 +12,15 @@ logger = logging.getLogger("networkos")
 
 class ResearchOrchestrator:
     @staticmethod
-    async def create_research_plan(contact_id: str, triggered_by: str, db: AsyncSession) -> str:
+    async def create_research_plan(
+        contact_id: str,
+        triggered_by: str = "manual",
+        db: AsyncSession = None,
+        entity_type: str = "person",
+        **kwargs
+    ) -> str:
+        if db is None and "db_session" in kwargs:
+            db = kwargs["db_session"]
         run_id = str(uuid.uuid4())
         run = ResearchRun(
             id=run_id,

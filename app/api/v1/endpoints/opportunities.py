@@ -1,17 +1,25 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from typing import List, Optional
-import uuid
 from datetime import datetime, timezone
 
 from app.db.session import get_db
 from app.api.dependencies import get_current_user
-from app.models.opportunity import Opportunity, OpportunityStatus
+from app.models.opportunity import Opportunity, OpportunityStatus, OpportunityLifecycleStatus
+from app.schemas.opportunity import (
+    OpportunityOut,
+    OpportunityListResponse,
+    OpportunityDetailOut,
+    OpportunityCreateIn,
+    OpportunityValidateIn,
+    OpportunityValidationResponse,
+    to_frontend_status,
+)
+from app.services.opportunity_service import OpportunityService
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
-# Default seed opportunities to provide realistic immediate live search & browsing
+# Default seed opportunities for live search and prototype demos
 DEFAULT_SEED_OPPORTUNITIES = [
     {
         "id": "opp-sap-migration-01",
@@ -75,28 +83,81 @@ DEFAULT_SEED_OPPORTUNITIES = [
     }
 ]
 
-@router.get("")
+
+# ==============================================================================
+# Database-Backed CRUD & Intelligence Endpoints
+# ==============================================================================
+
+@router.get("", response_model=OpportunityListResponse)
 async def list_opportunities(
     status: Optional[str] = Query(None, description="Filter by status (CANDIDATE, VALIDATED, etc.)"),
+    contact_id: Optional[str] = Query(None, description="Filter by contact ID"),
     q: Optional[str] = Query(None, description="Quick search term"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """List all opportunities with optional status and text filtering."""
-    results = list(DEFAULT_SEED_OPPORTUNITIES)
-    if status:
-        results = [o for o in results if o["status"].upper() == status.upper()]
+    """List opportunities for the authenticated organization with optional filtering."""
+    opps, total = await OpportunityService.list_opportunities(
+        db=db,
+        organization_id=user["organization_id"],
+        status=status,
+        contact_id=contact_id,
+        limit=limit,
+        offset=offset,
+    )
     if q:
         q_lower = q.lower()
-        results = [
-            o for o in results 
-            if q_lower in o["title"].lower() 
-            or q_lower in o["companyName"].lower() 
-            or q_lower in o["personName"].lower()
-            or q_lower in o["problem"].lower()
+        opps = [
+            o for o in opps
+            if q_lower in (o.title or "").lower()
+            or q_lower in (o.company_name or "").lower()
+            or q_lower in (o.problem or "").lower()
         ]
-    return {"opportunities": results}
+        total = len(opps)
 
+    return OpportunityListResponse(
+        opportunities=[OpportunityOut.model_validate(o) for o in opps],
+        total=total,
+    )
+
+
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=OpportunityDetailOut)
+async def create_opportunity(
+    payload: OpportunityCreateIn,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Create a new commercial opportunity with validation and attribution."""
+    created = await OpportunityService.create_opportunity(
+        db=db,
+        payload=payload,
+        organization_id=user["organization_id"],
+        user=user,
+    )
+    return OpportunityDetailOut.model_validate(created)
+
+
+@router.post("/derive/{contact_id}", status_code=status.HTTP_201_CREATED, response_model=OpportunityDetailOut)
+async def derive_opportunity(
+    contact_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Derive opportunity grounded in Contact 360 research (idempotent)."""
+    opp = await OpportunityService.derive_opportunity_from_contact(
+        db=db,
+        contact_id=contact_id,
+        organization_id=user["organization_id"],
+        user=user,
+    )
+    return OpportunityDetailOut.model_validate(opp)
+
+
+# ==============================================================================
+# Live Search & Pipeline Prototypes (Preserved)
+# ==============================================================================
 
 @router.get("/search")
 async def live_opportunity_search(
@@ -182,52 +243,47 @@ async def get_opportunity_pipeline(
     }
 
 
-@router.get("/{opportunity_id}")
+# ==============================================================================
+# Parametric Endpoints (Defined after static paths to prevent path masking)
+# ==============================================================================
+
+@router.get("/{opportunity_id}", response_model=OpportunityDetailOut)
 async def get_opportunity(
     opportunity_id: str,
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Retrieve detailed opportunity context including origin references."""
-    for opp in DEFAULT_SEED_OPPORTUNITIES:
-        if opp["id"] == opportunity_id:
-            return opp
-
-    # Fallback template if unknown ID is passed
-    return {
-        "id": opportunity_id,
-        "title": "Custom Enterprise Opportunity",
-        "personId": "c-unknown",
-        "personName": "Network Prospect",
-        "companyId": "comp-unknown",
-        "companyName": "Target Enterprise",
-        "trustedContextIds": [],
-        "problem": "Identified operational friction requiring external capability.",
-        "requirement": "Targeted solution matching and founder review.",
-        "timeline": "To be confirmed",
-        "budgetSignal": "Discovery Phase",
-        "opportunityType": "EXPLORATORY",
-        "confidence": 75,
-        "status": "CANDIDATE",
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-        "updatedAt": datetime.now(timezone.utc).isoformat()
-    }
+    """Retrieve detailed opportunity context strictly scoped to the user's organization."""
+    opp = await OpportunityService.get_opportunity(
+        db=db,
+        opportunity_id=opportunity_id,
+        organization_id=user["organization_id"],
+    )
+    return OpportunityDetailOut.model_validate(opp)
 
 
-@router.patch("/{opportunity_id}/validate")
+@router.patch("/{opportunity_id}/validate", response_model=OpportunityValidationResponse)
 async def validate_opportunity(
     opportunity_id: str,
+    payload: OpportunityValidateIn = OpportunityValidateIn(),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Founder action: validate an inferred opportunity, promoting CANDIDATE to VALIDATED."""
-    for opp in DEFAULT_SEED_OPPORTUNITIES:
-        if opp["id"] == opportunity_id:
-            opp["status"] = "VALIDATED"
-            opp["updatedAt"] = datetime.now(timezone.utc).isoformat()
-            return {"success": True, "status": "VALIDATED", "id": opportunity_id}
-
-    return {"success": True, "status": "VALIDATED", "id": opportunity_id}
+    """Validate or qualify an opportunity with lifecycle transition rules and identity gate."""
+    updated = await OpportunityService.validate_opportunity(
+        db=db,
+        opportunity_id=opportunity_id,
+        payload=payload,
+        organization_id=user["organization_id"],
+        user=user,
+    )
+    return OpportunityValidationResponse(
+        success=True,
+        opportunity_id=updated.id,
+        status=to_frontend_status(updated.status),
+        message=f"Opportunity {updated.id} status updated to {to_frontend_status(updated.status)}",
+        opportunity=OpportunityDetailOut.model_validate(updated),
+    )
 
 
 @router.get("/{opportunity_id}/solutions")
