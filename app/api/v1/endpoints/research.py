@@ -124,6 +124,40 @@ async def create_research_job(
         message="Research job successfully created across all enabled providers"
     )
 
+@router.post("/jobs/contact/{contact_id}", response_model=ResearchJobCreatedOut)
+async def create_research_job_for_contact(
+    contact_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Triggers multi-source deep research for an existing contact record (e.g. from Bhanu's network).
+    Enqueues research workers and promotes contact to the deep-researched pipeline.
+    """
+    contact_res = await db.execute(select(Contact).where(Contact.id == contact_id))
+    contact = contact_res.scalars().first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    contact.status = ContactStatus.RESEARCHING
+    await db.commit()
+
+    run_id = await ResearchOrchestrator.create_research_plan(
+        contact_id=contact.id,
+        triggered_by=user.get("user_id", "admin"),
+        db=db
+    )
+
+    background_tasks.add_task(execute_research_run, run_id)
+
+    return ResearchJobCreatedOut(
+        job_id=run_id,
+        contact_id=contact.id,
+        status="QUEUED",
+        message=f"Deep research initiated for {contact.full_name or 'contact'}"
+    )
+
 @router.get("/jobs/{job_id}", response_model=ResearchJobStatusOut)
 async def get_research_job_status(
     job_id: str,

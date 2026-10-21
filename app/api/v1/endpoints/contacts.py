@@ -1,7 +1,8 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import delete
+from sqlalchemy import delete, or_, and_
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import uuid
@@ -9,7 +10,7 @@ import re
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.session import get_db
-from app.models.identity import Contact, ExternalIdentity, ContactType
+from app.models.identity import Contact, ExternalIdentity, ContactType, ContactStatus
 from app.models.orchestration import ResearchRun, ResearchTask
 from app.schemas.contacts import ContactCreateURL, ContactInDB, ContactUpdate, Contact360, ContactOverviewSchema
 from app.api.dependencies import get_current_user
@@ -30,6 +31,8 @@ from app.schemas.opportunity import to_backend_status
 from app.services.identity import canonicalize_linkedin_url, extract_name_from_linkedin_slug
 from app.schemas.company_intelligence import CompanyIntelligenceOut, CompanyIntelligenceRequest
 from app.services.company_intelligence import CompanyIntelligenceService
+
+logger = logging.getLogger("networkos")
 
 router = APIRouter()
 
@@ -100,20 +103,30 @@ async def create_contact_from_linkedin(
 @router.get("", response_model=List[ContactOverviewSchema])
 async def list_contacts(
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-    contact_type: str = Query(ContactType.TARGET, description="Filter by TARGET or BHANU_CONNECTION"),
+    limit: int = Query(100, ge=1, le=500),
+    contact_type: Optional[str] = Query(None, description="Filter by TARGET or BHANU_CONNECTION"),
+    only_researched: bool = Query(True, description="When true, returns only contacts with deep research"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    stmt = (
-        select(Contact)
-        .where(
-            Contact.organization_id == user["organization_id"],
-            Contact.contact_type == contact_type
+    run_cids_stmt = select(ResearchRun.contact_id).where(ResearchRun.contact_id.isnot(None))
+
+    stmt = select(Contact)
+    if only_researched:
+        stmt = stmt.where(
+            or_(
+                Contact.id.in_(run_cids_stmt),
+                and_(
+                    Contact.contact_type.in_([ContactType.TARGET, "TARGET_PROSPECT"]),
+                    Contact.status.in_([ContactStatus.RESEARCHING, ContactStatus.READY])
+                )
+            )
         )
-        .offset(skip)
-        .limit(limit)
-    )
+
+    if contact_type:
+        stmt = stmt.where(Contact.contact_type == contact_type)
+
+    stmt = stmt.order_by(Contact.updated_at.desc(), Contact.created_at.desc()).offset(skip).limit(limit)
     res = await db.execute(stmt)
     contacts = res.scalars().all()
 
@@ -166,6 +179,7 @@ async def list_contacts(
             "current_company": company or "Independent",
             "profile_url": c.profile_url,
             "status": c.status.value if hasattr(c.status, 'value') else str(c.status),
+            "contact_type": c.contact_type,
             "lastUpdated": c.updated_at.strftime("%Y-%m-%d %H:%M") if c.updated_at else c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "Recently"
         })
 
@@ -642,7 +656,7 @@ def extract_evidence_excerpt(evidence: Evidence, sr: Optional[SourceResult]) -> 
         for n in data["news"]:
             if isinstance(n, dict):
                 title = (n.get("title") or "").lower()
-                body = n.get("body") or n.get("snippet") or ""
+                body = n.get("body") or n.get("snippet")
                 if (title and title in claim_lower) or (claim_lower and claim_lower in title):
                     return body.strip() if body else n.get("title")
         if data["news"] and isinstance(data["news"][0], dict):
@@ -686,9 +700,14 @@ def extract_evidence_excerpt(evidence: Evidence, sr: Optional[SourceResult]) -> 
             if isinstance(repo, dict):
                 repo_name = (repo.get("name") or "").lower()
                 if repo_name and repo_name in claim_lower:
-                    desc = repo.get("description") or ""
-                    url = repo.get("html_url") or ""
-                    return f"{desc} ({url})".strip() if (desc or url) else None
+                    desc = repo.get("description")
+                    url = repo.get("html_url")
+                    if desc and url:
+                        return f"{desc.strip()} ({url.strip()})"
+                    if desc:
+                        return desc.strip()
+                    if url:
+                        return url.strip()
     if "profile" in data and isinstance(data["profile"], dict):
         bio = data["profile"].get("bio")
         if bio and isinstance(bio, str) and bio.strip():
