@@ -6,7 +6,7 @@ import uuid
 import re
 
 from app.db.session import get_db
-from app.models.identity import Contact, ExternalIdentity, DeletedContact, ContactStatus
+from app.models.identity import Contact, ExternalIdentity, DeletedContact, ContactStatus, ContactType
 from app.models.orchestration import ResearchRun, ResearchTask
 from app.schemas.contacts import ContactCreateURL, ContactInDB, ContactUpdate, Contact360, ContactOverviewSchema
 from app.api.dependencies import get_current_user
@@ -139,8 +139,7 @@ async def create_contact_from_linkedin(
             current_title=ext_data.get("role") or "Analyzing profile...",
             current_company=ext_data.get("company") or "Pending research",
             location=ext_data.get("location"),
-            profile_image_url=ext_data.get("image_url"),
-            contact_type="TARGET_PROSPECT"
+            profile_image_url=ext_data.get("image_url")
         )
         db.add(new_contact)
 

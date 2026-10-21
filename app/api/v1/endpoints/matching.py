@@ -1,6 +1,13 @@
 import os
-import docx
-from pypdf import PdfReader
+try:
+    import docx  # type: ignore
+except ImportError:
+    docx = None
+
+try:
+    from pypdf import PdfReader  # type: ignore
+except ImportError:
+    PdfReader = None
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Dict, Any
@@ -33,6 +40,8 @@ class BatchAnalysisRequest(BaseModel):
     documents: List[ProfileAnalysisRequest]
 
 def extract_docx_text(file_path: str) -> tuple[str, List[List[List[str]]]]:
+    if docx is None:
+        raise HTTPException(500, "python-docx package is not installed.")
     doc = docx.Document(file_path)
     full_text = []
     for para in doc.paragraphs:
@@ -51,6 +60,8 @@ def extract_docx_text(file_path: str) -> tuple[str, List[List[List[str]]]]:
     return "\n".join(full_text), tables_data
 
 def extract_pdf_text(file_path: str) -> str:
+    if PdfReader is None:
+        raise HTTPException(500, "pypdf package is not installed.")
     reader = PdfReader(file_path)
     full_text = []
     for page in reader.pages:
