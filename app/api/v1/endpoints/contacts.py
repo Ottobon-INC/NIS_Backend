@@ -106,6 +106,7 @@ async def list_contacts(
     limit: int = Query(100, ge=1, le=500),
     contact_type: Optional[str] = Query(None, description="Filter by TARGET or BHANU_CONNECTION"),
     only_researched: bool = Query(True, description="When true, returns only contacts with deep research"),
+    accepted_only: Optional[bool] = Query(None, description="Filter by acceptance: true for accepted, false for pending acceptance"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
@@ -122,6 +123,18 @@ async def list_contacts(
                 )
             )
         )
+
+    if accepted_only is True:
+        stmt = stmt.where(Contact.founder_reviewed == True)
+    elif accepted_only is False:
+        stmt = stmt.where(
+            and_(
+                or_(Contact.founder_reviewed == False, Contact.founder_reviewed.is_(None)),
+                or_(Contact.card_status.is_(None), Contact.card_status != "ARCHIVED")
+            )
+        )
+    else:
+        stmt = stmt.where(or_(Contact.card_status.is_(None), Contact.card_status != "ARCHIVED"))
 
     if contact_type:
         stmt = stmt.where(Contact.contact_type == contact_type)
@@ -180,6 +193,8 @@ async def list_contacts(
             "profile_url": c.profile_url,
             "status": c.status.value if hasattr(c.status, 'value') else str(c.status),
             "contact_type": c.contact_type,
+            "card_status": c.card_status,
+            "founder_reviewed": bool(c.founder_reviewed),
             "lastUpdated": c.updated_at.strftime("%Y-%m-%d %H:%M") if c.updated_at else c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "Recently"
         })
 
@@ -280,6 +295,74 @@ async def confirm_contact_identify(
     user: dict = Depends(get_current_user)
 ):
     return {"success": True}
+
+@router.post("/{id}/accept")
+@router.patch("/{id}/accept")
+async def accept_contact(
+    id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Explicitly accepts a researched contact, promoting them to active People & Relationships.
+    """
+    run = (await db.execute(select(ResearchRun).where(ResearchRun.id == id))).scalars().first()
+    contact_id = run.contact_id if run else id
+
+    stmt = select(Contact).where(Contact.id == contact_id, Contact.organization_id == user["organization_id"])
+    contact = (await db.execute(stmt)).scalars().first()
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+
+    contact.founder_reviewed = True
+    contact.founder_reviewed_at = datetime.now(timezone.utc)
+    contact.card_status = "ACTIONABLE"
+    contact.reviewed_by = user.get("user_id", "admin")
+
+    await db.commit()
+    await db.refresh(contact)
+
+    return {
+        "success": True,
+        "contact_id": contact.id,
+        "founder_reviewed": True,
+        "card_status": contact.card_status,
+        "message": f"Successfully accepted {contact.full_name or 'contact'} into People & Relationships."
+    }
+
+@router.post("/{id}/decline")
+@router.patch("/{id}/decline")
+async def decline_contact(
+    id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Declines a researched contact, archiving them so they do not appear in People & Relationships.
+    """
+    run = (await db.execute(select(ResearchRun).where(ResearchRun.id == id))).scalars().first()
+    contact_id = run.contact_id if run else id
+
+    stmt = select(Contact).where(Contact.id == contact_id, Contact.organization_id == user["organization_id"])
+    contact = (await db.execute(stmt)).scalars().first()
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+
+    contact.founder_reviewed = False
+    contact.card_status = "ARCHIVED"
+    contact.founder_reviewed_at = datetime.now(timezone.utc)
+    contact.reviewed_by = user.get("user_id", "admin")
+
+    await db.commit()
+    await db.refresh(contact)
+
+    return {
+        "success": True,
+        "contact_id": contact.id,
+        "founder_reviewed": False,
+        "card_status": "ARCHIVED",
+        "message": f"Declined {contact.full_name or 'contact'}."
+    }
 
 @router.get("/{id}/360")
 async def get_contact_360_data(
@@ -409,6 +492,9 @@ async def get_contact_360_data(
         "title": contact.current_title or snapshot.get("current_role", "Unknown"),
         "company": contact.current_company or snapshot.get("current_organization", "Unknown"),
         "location": contact.location or snapshot.get("location", "Unknown"),
+        "founder_reviewed": bool(contact.founder_reviewed),
+        "card_status": contact.card_status,
+        "contact_type": contact.contact_type,
         "linkedinUrl": "",
         "tier": snapshot.get("networkos_tier", "Tier 3"),
         "personIntelligence": {

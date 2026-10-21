@@ -40,6 +40,8 @@ class ContactOverviewSchema(BaseModel):
     profile_url: Optional[str] = None
     status: str
     contact_type: Optional[str] = None
+    card_status: Optional[str] = None
+    founder_reviewed: Optional[bool] = False
     lastUpdated: str
 
 class Contact360(BaseModel):

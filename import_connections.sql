@@ -1,4 +1,26 @@
--- Insert all 820 extracted people from Connections.csv into public.contacts
+PS C:\Users\poorv\OneDrive\Desktop\NetworkOS\NIS_Frontend> git push origin poorvisha
+To https://github.com/Ottobon-INC/NIS_Frontend.git
+ ! [rejected]        poorvisha -> poorvisha (fetch first)
+error: failed to push some refs to 'https://github.com/Ottobon-INC/NIS_Frontend.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+PS C:\Users\poorv\OneDrive\Desktop\NetworkOS\NIS_Frontend> git pull origin main
+From https://github.com/Ottobon-INC/NIS_Frontend
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+PS C:\Users\poorv\OneDrive\Desktop\NetworkOS\NIS_Frontend> git push origin poorvisha
+To https://github.com/Ottobon-INC/NIS_Frontend.git
+ ! [rejected]        poorvisha -> poorvisha (fetch first)
+error: failed to push some refs to 'https://github.com/Ottobon-INC/NIS_Frontend.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+PS C:\Users\poorv\OneDrive\Desktop\NetworkOS\NIS_Frontend> -- Insert all 820 extracted people from Connections.csv into public.contacts
 INSERT INTO public.contacts (
     id, organization_id, first_name, last_name, full_name,
     current_title, current_company, email, profile_url,
