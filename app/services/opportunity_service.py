@@ -419,13 +419,25 @@ class OpportunityService:
                 )
 
                 if is_identity_uncertain or identity_confidence < 70:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=(
+                    if identity_confidence < 70:
+                        detail_msg = (
                             f"Cannot validate opportunity: Target identity confidence is below threshold "
-                            f"({identity_confidence}% < 70%) or unverified. Complete identity verification "
+                            f"({identity_confidence}% < 70%). Complete identity verification "
                             f"before commercial qualification."
                         )
+                    elif snapshot.get("provenance_status") == "UNVERIFIED":
+                        detail_msg = (
+                            f"Cannot validate opportunity: Target identity provenance is unverified (no confirmed sources). "
+                            f"Complete identity verification before commercial qualification."
+                        )
+                    else:
+                        detail_msg = (
+                            f"Cannot validate opportunity: Target identity is uncertain across research sources. "
+                            f"Complete identity verification before commercial qualification."
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=detail_msg
                     )
             else:
                 if opp.confidence < 70:

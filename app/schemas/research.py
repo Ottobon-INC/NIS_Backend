@@ -145,6 +145,7 @@ class OpportunityValidationOut(BaseModel):
     can_validate: bool = True
     identity_gate_passed: bool = True
     identity_confidence: int = 0
+    identity_gate_reason: Optional[str] = None
     business_problem: Optional[str] = None
     capability_match: Optional[str] = None
     supporting_evidence_ids: List[str] = []
