@@ -67,30 +67,34 @@ class SemanticProductMatcherService:
             "id": "prod-ottobon-courses",
             "name": "Ottobon Course Platform",
             "tagline": "Don't just watch. Build. Structured AI-native learning for practical upskilling",
-            "category": "AI-Native EdTech",
+            "category": "AI-Native EdTech & Upskilling",
             "description": (
-                "A structured, AI-native guided upskilling environment inside the Ottobon Academy ecosystem "
-                "converting learners from passive tutorial consumption to practical software building. Built on "
+                "A structured, AI-native guided course and upskilling environment inside the Ottobon Academy ecosystem "
+                "converting learners from passive tutorial consumption to practical software and professional capability building. Built on "
                 "the 4-stage framework: Learn -> Comprehend -> Articulate -> Apply, with live AI doubt clarification, "
-                "assessment checkpoints, and real-world project sandboxes."
+                "assessment checkpoints, certification sandboxes, and cohort learning management."
             ),
-            "target_audience": "Software developers, engineering students, career switchers, and technical teams",
+            "target_audience": "Software developers, engineering students, career switchers, technical teams, professional coaches, corporate trainers, and certification institutes",
             "business_model": "Cohort Tuition, Self-Paced Course Licenses, and Enterprise Academy Tracks",
             "problem_domains": [
-                "Learners experiencing tutorial fatigue: watching endless videos but unable to build independent software projects.",
+                "Professional training institutes, coaches, and certification academies needing structured digital delivery, AI-assisted interactive learning, and automated assessment workflows.",
+                "Training programs and coaching certifications struggling with manual delivery and lacking structured, AI-guided interactive curriculum.",
+                "Learners experiencing tutorial fatigue: watching endless videos but unable to build independent software projects or pass practical assessments.",
                 "Passive video consumption creating false confidence without proof of practical comprehension.",
-                "Absence of structured validation, immediate AI doubt clarification, and hands-on coding feedback.",
+                "Absence of structured validation, immediate AI doubt clarification, and hands-on coding and practical feedback.",
                 "Technical team onboarding friction and software engineering upskilling bottlenecks."
             ],
             "semantic_keywords": [
                 "tutorial fatigue", "learning", "upskilling", "course", "education", "edtech", "coding",
                 "software engineering", "doubt clarification", "ai tutor", "capstone", "code sandbox",
-                "curriculum", "technical training", "developer education", "student", "academy", "programming"
+                "curriculum", "technical training", "developer education", "student", "academy", "programming",
+                "coaching", "coach", "certification", "training program", "leadership training", "emotional intelligence",
+                "certification program", "coach certification", "cohort", "interactive learning", "trainer"
             ],
             "key_features": [
                 "4-Stage Learning Framework (Learn -> Comprehend -> Articulate -> Apply)",
                 "AI-Assisted Interactive Doubt Clarification & Intelligent Tutor",
-                "Automated Assessment Checkpoints & Code Validation Sandboxes",
+                "Automated Assessment Checkpoints & Certification Sandboxes",
                 "Hands-on Project & Capstone Building Workspaces",
                 "Cohort Engagement, Peer Collaboration & Learning Streaks"
             ],
@@ -107,13 +111,14 @@ class SemanticProductMatcherService:
                 "A comprehensive creator, content, and digital-growth ecosystem under Autobahn Professional Services "
                 "combining physical studio infrastructure (sBLOOM Cre@tors Studio) with an end-to-end digital content "
                 "engine (Idea -> Plan -> Create -> Edit -> Enhance -> Distribute -> Discover -> Grow) for creators, "
-                "doctors, healthcare leaders, founders, and executives building personal brands and thought leadership."
+                "doctors, executive coaches, corporate trainers, healthcare leaders, founders, and executives building personal brands and thought leadership."
             ),
-            "target_audience": "Digital creators, doctors & healthcare specialists, founders & executives building authority",
+            "target_audience": "Digital creators, doctors & healthcare specialists, executive coaches & trainers, founders & executives building authority",
             "business_model": "Studio Memberships, Managed Production Packages, and Content Retainers",
             "problem_domains": [
                 "Doctor personal branding, medical content strategy, and healthcare thought leadership on LinkedIn and social media.",
-                "Creators, doctors, and specialists overwhelmed by end-to-end production (writing, shooting, editing, publishing) alone, creating a hard ceiling on content output.",
+                "Executive coaches, leadership trainers, and consultants struggling to produce consistent thought leadership content and build authority to attract high-ticket coaching clients.",
+                "Creators, doctors, coaches, and specialists overwhelmed by end-to-end production (writing, shooting, editing, publishing) alone, creating a hard ceiling on content output.",
                 "Founders, clinicians, and executives struggling to consistently produce platform-ready social video and build thought leadership authority.",
                 "High friction in briefing editors and maintaining consistent Creator Style Profiles across multi-channel distribution.",
                 "Need for AI-assisted repurposing of long-form interviews, clinical case discussions, and podcasts into high-impact short-form clips."
@@ -122,12 +127,13 @@ class SemanticProductMatcherService:
                 "personal branding", "doctor personal branding", "content strategy", "medical content", "healthcare branding",
                 "doctor", "creator", "content creation", "podcast", "studio", "reels", "video editing", "scripting",
                 "social footprint", "thought leadership", "repurposing", "youtube", "linkedin personal brand",
-                "production bottleneck", "creator burnout", "media infrastructure", "short-form video", "influencer"
+                "production bottleneck", "creator burnout", "media infrastructure", "short-form video", "influencer",
+                "coach", "coaching", "executive coach", "leadership development", "consultant branding"
             ],
             "key_features": [
                 "Physical sBLOOM Cre@tors Studio Infrastructure (Podcast sets, reels studios, 4K cameras, editing suites)",
                 "8-Stage Content Production Engine (Idea to Distribution & Growth)",
-                "Doctor & Executive Thought Leadership Personal Branding Engine",
+                "Doctor, Executive & Coach Thought Leadership Personal Branding Engine",
                 "AI-Assisted Content Repurposing (Transcripts to short-form video hooks & articles)",
                 "Cross-Platform Social Footprint Expansion & Creator Style Profiles",
                 "Creator-to-Business Matching & Sponsorship Marketplace"
@@ -237,6 +243,8 @@ class SemanticProductMatcherService:
             return "Workforce Operations & HR Management"
         if any(w in text_lower for w in ["tutorial fatigue", "learning", "upskilling", "course", "edtech", "coding", "software engineer", "doubt clarification"]):
             return "AI-Native Developer Education & Upskilling"
+        if any(w in text_lower or w in company_lower for w in ["coach", "certification", "training program", "leadership training", "emotional intelligence", "nlp training", "mentor", "trainer"]):
+            return "Professional Coaching & Training Certification"
         if any(w in text_lower for w in ["relationship", "network", "investor", "deal", "commercial opportunity", "dossier", "founder"]):
             return "Commercial Relationship Intelligence & Deal Flow"
         if any(w in text_lower for w in ["construction", "excavator", "bulldozer", "heavy machinery", "civil engineering"]):
@@ -305,6 +313,106 @@ class SemanticProductMatcherService:
         return False
 
     @classmethod
+    def _is_unverified_problem(cls, problem_text: Optional[str]) -> bool:
+        """
+        Determines if a problem statement indicates an unverified, placeholder, or absent problem.
+        If a problem is not verified, no solution should ever be suggested.
+        """
+        if not problem_text or not problem_text.strip():
+            return True
+        p_lower = problem_text.strip().lower()
+        unverified_patterns = [
+            "no verified",
+            "unverified",
+            "not verified",
+            "no explicit problem",
+            "pending research",
+            "unknown",
+            "none",
+            "n/a",
+            "analyzing dossier",
+            "awaiting research",
+            "not specified",
+            "no problem"
+        ]
+        if any(pat in p_lower for pat in unverified_patterns):
+            return True
+        # Strip all punctuation and check if remaining text is trivial
+        cleaned = re.sub(r'[^a-zA-Z0-9]', '', p_lower)
+        if len(cleaned) < 4:
+            return True
+        return False
+
+    @classmethod
+    def _generate_solution_blueprint(
+        cls,
+        problem_text: str,
+        domain: str,
+        connection_title: Optional[str] = None,
+        connection_company: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Generates a concrete, actionable technical/operational solution blueprint for problems
+        that do not match any off-the-shelf product in the 5-product catalog.
+        Returns None if the problem is unverified.
+        """
+        if cls._is_unverified_problem(problem_text):
+            return None
+
+        p_lower = (problem_text or "").lower()
+        c_name = connection_company or "the enterprise"
+
+        # 1. Systems scaling, architecture, infrastructure, backend, performance
+        if any(w in p_lower for w in ["systems scaling", "scaling", "architecture", "microservices", "latency", "monolith", "cloud", "infrastructure", "concurrency", "throughput", "database scaling", "bottleneck"]):
+            return (
+                f"Architecture Modernization & Distributed Scaling Blueprint for {c_name}: "
+                f"(1) Profiling & Bottleneck Isolation: Audit distributed traces, slow queries, and database locks under peak load to pinpoint compute/storage bottlenecks. "
+                f"(2) Asynchronous Workload Decoupling: Offload synchronous blocking endpoints via event-driven messaging (Kafka / AWS SQS) and dedicated background worker pools. "
+                f"(3) Data Tier Caching & Sharding: Implement multi-layer caching (Redis) and database read-replicas with connection pooling to eliminate database saturation. "
+                f"(4) Elastic Horizontal Autoscaling: Deploy containerized microservices with Horizontal Pod Autoscaling (Kubernetes / EKS) behind load balancers. "
+                f"Delivered via Ottobon Bespoke Engineering: 60-hour Architecture Review & Scaling Sprint ($10,000 sprint)."
+            )
+
+        # 2. Data engineering, pipelines, analytics, big data
+        if any(w in p_lower for w in ["data", "etl", "pipeline", "warehouse", "analytics", "lakehouse"]):
+            return (
+                f"Modern Data Platform & Pipeline Optimization for {c_name}: "
+                f"(1) Transition legacy batch ETL to event-driven streaming pipelines (dbt, Apache Airflow / Dagster). "
+                f"(2) Standardize schema contracts and automated data quality validation checkpoints. "
+                f"(3) Optimize analytical query performance with columnar storage and partitioned warehouses (Snowflake / BigQuery). "
+                f"Delivered via Ottobon Custom Data Engineering Advisory Sprint."
+            )
+
+        # 3. Security, compliance, DevOps, CI/CD
+        if any(w in p_lower for w in ["security", "compliance", "soc2", "devops", "ci/cd", "deployment"]):
+            return (
+                f"Automated Compliance & DevOps Pipeline Blueprint for {c_name}: "
+                f"(1) Implement automated CI/CD security scanning, vulnerability gates, and secret management. "
+                f"(2) Enforce infrastructure-as-code (Terraform) with policy-as-code guardrails. "
+                f"(3) Streamline audit evidence collection for continuous compliance. "
+                f"Delivered via Ottobon DevOps & Cloud Advisory Sprint."
+            )
+
+        # 4. Operations, workflow friction, business processes
+        if any(w in p_lower for w in ["operations", "operational", "workflow", "process", "manual", "efficiency", "coordination"]):
+            return (
+                f"Operational Workflow Modernization & Automation for {c_name}: "
+                f"(1) Process Mining: Map manual touchpoints, handoff bottlenecks, and repetitive operational tasks. "
+                f"(2) Integrated Automation: Deploy low-latency webhook connectors and workflow orchestrators to automate inter-departmental handoffs. "
+                f"(3) Real-Time Operational Dashboard: Unified monitoring for task SLAs, turnaround times, and exception escalation. "
+                f"Delivered via Ottobon Operational Systems Sprint."
+            )
+
+        # 5. Default tailored technical & advisory blueprint
+        return (
+            f"Tailored Solution Architecture Blueprint for {c_name}: "
+            f"(1) Comprehensive Current-State Diagnostic: Evaluate existing systems, operational friction points, and constraint thresholds. "
+            f"(2) Solution Architecture Specification: Formulate a modern, decoupled target architecture with clear ROI milestones. "
+            f"(3) Iterative Delivery Sprint: Execute a focused pilot implementation to resolve the core bottleneck within 4-6 weeks. "
+            f"Delivered via Ottobon Bespoke Engineering & Advisory Sprint."
+        )
+
+    @classmethod
     def _build_insufficient_information_response(
         cls,
         problem_text: str,
@@ -326,6 +434,29 @@ class SemanticProductMatcherService:
             evidence.append(f"Market Context: {context['industry']}")
         evidence.append(f"Stated Strategic Focus: \"{problem_text}\"")
 
+        is_unverified = cls._is_unverified_problem(problem_text)
+        if is_unverified:
+            rationale = (
+                f"No verified operational problem or business bottleneck has been identified for this contact. "
+                f"Product capability matching and solution recommendations require an authentic, verified operational problem."
+            )
+            suggested_status = "Problem Unverified"
+            proposed_sol = None
+        else:
+            rationale = (
+                f"The stated problem describes a broad market or strategic objective ('{problem_text}') rather than a "
+                f"concrete operational friction, workflow constraint, or software bottleneck. Product capability matching "
+                f"evaluates documented product features against specific operational pain points. Additional discovery "
+                f"is required to identify the underlying operational challenge before recommending solutions."
+            )
+            suggested_status = "Insufficient Information"
+            proposed_sol = cls._generate_solution_blueprint(
+                problem_text=problem_text,
+                domain=domain,
+                connection_title=connection_title,
+                connection_company=connection_company,
+            )
+
         return SemanticProductMatchResponse(
             connection_id=connection_id,
             connection_name=connection_name or "Connection",
@@ -334,14 +465,9 @@ class SemanticProductMatcherService:
             identified_problem=problem_text,
             problem_domain=domain,
             matching_outcome=MatchingOutcome.INSUFFICIENT_INFORMATION,
-            suggested_status="Insufficient Information",
+            suggested_status=suggested_status,
             matches=[],
-            rationale=(
-                f"The stated problem describes a broad market or strategic objective ('{problem_text}') rather than a "
-                f"concrete operational friction, workflow constraint, or software bottleneck. Product capability matching "
-                f"evaluates documented product features against specific operational pain points. Additional discovery "
-                f"is required to identify the underlying operational challenge before recommending solutions."
-            ),
+            rationale=rationale,
             relevant_evidence=evidence,
             supported_capabilities=[],
             missing_information=[
@@ -363,7 +489,8 @@ class SemanticProductMatcherService:
                 "Conduct an exploratory discovery interview to uncover the specific operational friction and workflow constraints "
                 "before evaluating capability fit against our product portfolio."
             ),
-            capability_gap=None
+            capability_gap=None,
+            proposed_solution=proposed_sol
         )
 
     @classmethod
@@ -479,7 +606,8 @@ class SemanticProductMatcherService:
                     unverified_hypotheses=[],
                     validation_questions=[],
                     recommended_next_step="Acknowledge capability boundary. Do not propose existing products unless custom engineering is commissioned.",
-                    capability_gap=f"Unsupported domain: {oop['domain']}"
+                    capability_gap=f"Unsupported domain: {oop['domain']}",
+                    proposed_solution=f"Develop a specialized partner integration or custom system for {oop['domain']} outside our standard 5-product SaaS catalog."
                 )
 
         scored_candidates: List[ProductMatchItem] = []
@@ -547,6 +675,12 @@ class SemanticProductMatcherService:
 
         if not viable_matches:
             catalog_names = ", ".join(str(p["name"]) for p in cls.PRODUCT_CATALOG)
+            proposed_sol = cls._generate_solution_blueprint(
+                problem_text=problem_text,
+                domain=domain,
+                connection_title=connection_title,
+                connection_company=connection_company,
+            )
             return SemanticProductMatchResponse(
                 connection_id=connection_id,
                 connection_name=connection_name or "Connection",
@@ -568,7 +702,8 @@ class SemanticProductMatcherService:
                 unverified_hypotheses=[],
                 validation_questions=[],
                 recommended_next_step="Acknowledge capability boundary. Do not propose existing products unless custom engineering is commissioned.",
-                capability_gap=f"No product in the active catalog matches {domain}."
+                capability_gap=f"No product in the active catalog matches {domain}.",
+                proposed_solution=proposed_sol
             )
 
         top_match = viable_matches[0]
@@ -662,7 +797,22 @@ class SemanticProductMatcherService:
         ])
 
         system_prompt = f"""You are the Chief Solutions Architect for NetworkOS.
-Your job is to semantically evaluate a connection's business problem and map our products based on documented capability evidence.
+Your core principle:
+UNDERSTAND THE CONNECTION'S PROBLEM DEEPLY:
+1. IF WE HAVE A SOLUTION IN OUR PRODUCT CATALOG, SUGGEST IT:
+   - Carefully evaluate how our 5 products (Ottobon Course Platform, sBLOOM, TalentOps, JanmaSethu, NetworkOS Platform) directly solve or enable their operational requirements:
+     * For courses, training programs, coaching academies, or certification delivery -> Ottobon Course Platform is a direct capability solution.
+     * For coaches, doctors, executives, or creators needing thought leadership, personal branding, video production, or client attraction -> sBLOOM is a direct capability solution.
+     * For workforce/HR administrative friction, payroll, and timesheets -> TalentOps.
+     * For clinic/patient workflow bottlenecks and digital practice intake -> JanmaSethu.
+     * For commercial relationship intelligence, deal flow, and founder networks -> NetworkOS Platform.
+   - When suggesting matched products, assign an accurate match_score (70-95%), alignment_level, why_this_product_solves_it, and relevant_features.
+
+2. IF WE DO NOT HAVE A DIRECT PRODUCT MATCH, YOU MUST SAY WHAT CAN BE A SOLUTION:
+   - Never stop at a dead-end rejection.
+   - Populate capability_gap (what part is outside the 5 catalog products).
+   - In proposed_solution: Explain what CAN be a solution — describe the concrete solution architecture, custom AI deliverable, external system integration, or tailored deliverable that solves their problem.
+   - In recommended_next_step: Specific founder or discovery action to scope and validate that solution.
 
 OUR CURRENT PRODUCT CATALOG (5 PRODUCTS ONLY):
 {catalog_summary}
@@ -670,8 +820,7 @@ OUR CURRENT PRODUCT CATALOG (5 PRODUCTS ONLY):
 YOU MUST ASSIGN EXACTLY ONE OF THE FOLLOWING FOUR MATCHING OUTCOMES:
 
 1. 'MATCH_FOUND':
-   - Use ONLY when documented product capabilities directly solve the specific, identified operational problem with clear evidence.
-   - Do NOT recommend a product merely because its description is semantically similar or tangentially related.
+   - Use when documented product capabilities directly solve or enable the specific operational problem with clear evidence.
    - Must specify: matches, relevant_features, why_this_product_solves_it, and supported_capabilities.
 
 2. 'INSUFFICIENT_INFORMATION':
@@ -686,14 +835,15 @@ YOU MUST ASSIGN EXACTLY ONE OF THE FOLLOWING FOUR MATCHING OUTCOMES:
    - Must provide: unverified_hypotheses, validation_questions, and recommended_next_step.
 
 4. 'NO_MATCH_FOUND':
-   - Use ONLY when the specific operational problem is sufficiently understood, but none of our 5 products (JanmaSethu, Ottobon Course Platform, sBLOOM, TalentOps, NetworkOS Platform) possess the required capabilities (e.g., enterprise ERP/CRM billing software, core banking ledger, physical civil engineering machinery, hardware manufacturing).
+   - Use ONLY when the specific operational problem is sufficiently understood, but none of our 5 products possess the required capabilities (e.g., enterprise ERP/CRM billing software, core banking ledger, physical civil engineering machinery, hardware manufacturing).
    - Do NOT output "Non-matching Domain". Classify the actual domain (e.g., "Enterprise ERP & Billing Systems", "Heavy Civil Construction").
    - Set matching_outcome='NO_MATCH_FOUND', suggested_status='No matches found', matches=[], and populate capability_gap.
+   - AND CRITICALLY: Always populate proposed_solution with what CAN be a solution (e.g., a custom AI architecture, specialized integration, or bespoke workflow).
 
 CRITICAL RULES:
 1. STRICT CATALOG LIMIT: Our company ONLY has 5 products: JanmaSethu, sBLOOM, TalentOps, Ottobon Course Platform, and NetworkOS Platform. Under NO circumstances invent products outside these 5.
-2. DO NOT TREAT INDUSTRY AS REJECTION: Evaluate the underlying business problem against documented capabilities. If the problem is vague, return INSUFFICIENT_INFORMATION.
-3. SEPARATE FACTS FROM ASSUMPTIONS: Grounded facts go in relevant_evidence; unverified assumptions go in unverified_hypotheses; unknowns go in missing_information.
+2. DO NOT TREAT INDUSTRY AS REJECTION: Understand the underlying problem and evaluate if our platform/studio/workforce capabilities apply.
+3. ALWAYS PROVIDE A SOLUTION: If a product matches, suggest it. If not, say what can be a solution via proposed_solution.
 4. HUMAN-IN-THE-LOOP: All recommendations are advisory and require founder approval before outreach.
 """
 
@@ -778,6 +928,8 @@ Evaluate whether any of our products are suitable solutions. Choose strictly one
                 res.matches = []
                 if not res.capability_gap:
                     res.capability_gap = f"No product in the active catalog matches {res.problem_domain}."
+                if not res.proposed_solution:
+                    res.proposed_solution = f"Design and implement a tailored custom solution or external integration addressing {res.problem_domain.lower()} requirements."
                 if not res.rationale or "suitable" not in res.rationale.lower():
                     res.rationale = f"No matches found. None of our current products are suitable for this connection's problem."
                 if not res.recommended_next_step:

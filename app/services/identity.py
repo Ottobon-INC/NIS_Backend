@@ -137,11 +137,11 @@ class IdentityResolver:
             if target_name and tokens_match(target_name, gh_name):
                 if target_company and tokens_match(target_company, gh_company):
                     match_status = "CONFIRMED"
-                    match_confidence = 95
+                    match_confidence = 100
                     match_rationale = f"Exact name match '{gh_name}' and company match '{gh_company}'"
                 elif gh_bio and target_company and tokens_match(target_company, gh_bio):
                     match_status = "CONFIRMED"
-                    match_confidence = 90
+                    match_confidence = 95
                     match_rationale = f"Name match with company reference in bio: '{gh_company}'"
                 else:
                     match_status = "PROBABLE"
@@ -183,7 +183,7 @@ class IdentityResolver:
                 # Check institutional match
                 if target_company and any(tokens_match(target_company, inst) for inst in insts):
                     match_status = "CONFIRMED"
-                    match_confidence = 95
+                    match_confidence = 100
                     match_rationale = f"Author '{auth_name}' matches name and affiliated institution"
                 elif top_author.get("orcid"):
                     match_status = "PROBABLE"
@@ -221,9 +221,9 @@ class IdentityResolver:
             title_text = comp_data.get("title", "")
             snippet_text = comp_data.get("snippet", "")
 
-            if target_name and (tokens_match(target_name, title_text) or tokens_match(target_name, snippet_text)):
+            if target_name and (tokens_match(target_name, title_text) or tokens_match(target_name, snippet_text) or tokens_match(target_name, raw_text)):
                 match_status = "CONFIRMED"
-                match_confidence = 90
+                match_confidence = 100 if target_company and (tokens_match(target_company, title_text) or tokens_match(target_company, snippet_text) or tokens_match(target_company, raw_text)) else 90
                 match_rationale = f"Official corporate webpage matches name '{target_name}'"
             else:
                 match_status = "PROBABLE"
@@ -271,8 +271,12 @@ class IdentityResolver:
             # Check LinkedIn public profile snippet
             if "linkedin.com/in/" in source_ref or "site:linkedin.com/in/" in source_result.query:
                 match_status = "CONFIRMED"
-                match_confidence = 95
-                match_rationale = "Direct public LinkedIn profile and indexed career credentials"
+                # If target name or tokens match, confidence is 100%
+                if not target_name or tokens_match(target_name, raw_text) or tokens_match(target_name, source_ref) or tokens_match(target_name, source_result.query):
+                    match_confidence = 100
+                else:
+                    match_confidence = 95
+                match_rationale = "Direct public LinkedIn profile and verified career credentials"
             else:
                 match_status = "PROBABLE"
                 match_confidence = 75

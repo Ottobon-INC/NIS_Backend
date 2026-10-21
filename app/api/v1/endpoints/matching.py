@@ -179,33 +179,29 @@ async def semantic_match_connection(
     broad = snapshot.get("broad_business_problem", "").strip()
     current_role_str = snapshot.get("current_role") or (contact.current_title if contact else "")
     title_lower = current_role_str.lower() if current_role_str else ""
+    company_str = snapshot.get("current_organization") or (contact.current_company if contact else "")
+    company_lower = company_str.lower() if company_str else ""
     is_doctor = any(w in title_lower for w in ["doctor", "physician", "gastroenterologist", "medical", "clinic", "surgeon", "hospital"])
+    is_coach = any(w in title_lower or w in company_lower for w in ["coach", "coaching", "certification", "training", "mentor", "trainer", "academy", "gccp"])
 
-    if broad:
+    is_broad_verified = bool(broad) and not SemanticProductMatcherService._is_unverified_problem(broad)
+    is_smallest_verified = bool(smallest) and not SemanticProductMatcherService._is_unverified_problem(smallest)
+
+    if is_broad_verified:
         prob_text = broad
         if is_doctor and "branding" not in prob_text.lower() and "content" not in prob_text.lower():
             prob_text = f"{prob_text.rstrip('.')}; doctor personal branding and medical content strategy."
-    elif smallest:
+        elif is_coach and "platform" not in prob_text.lower() and "course" not in prob_text.lower():
+            prob_text = f"{prob_text.rstrip('.')}; structured digital course delivery platform and certification assessment workflows for coaching cohorts."
+    elif is_smallest_verified:
         prob_text = smallest
         if is_doctor and "branding" not in prob_text.lower() and "content" not in prob_text.lower():
             prob_text = f"{prob_text.rstrip('.')}; doctor personal branding and medical content strategy."
-    elif contact and contact.current_title and contact.current_company:
-        if is_doctor:
-            prob_text = f"Patient care workflow bottlenecks and clinical practice digital presence at {contact.current_company}."
-        elif any(w in title_lower for w in ["platform", "cloud", "infrastructure", "devops", "systems", "architect"]):
-            prob_text = f"Optimizing cloud infrastructure, latency bottlenecks, and scaling backend platform architecture at {contact.current_company}."
-        elif any(w in title_lower for w in ["ai", "machine learning", "ml", "intelligence"]):
-            prob_text = f"Autonomous enterprise AI agent orchestration, validation guardrails, and compliance governance at {contact.current_company}."
-        elif any(w in title_lower for w in ["integration", "data", "reporting", "analytics", "vp engineering", "cto"]):
-            prob_text = f"Automated reporting data pipelines, cloud modernization, and multi-system API integration at {contact.current_company}."
-        elif any(w in title_lower for w in ["security", "compliance", "ciso", "governance"]):
-            prob_text = f"SOC2 Type II compliance readiness, audit logging, and security governance frameworks at {contact.current_company}."
-        elif any(w in title_lower for w in ["hr", "people", "talent", "workforce"]):
-            prob_text = f"Automating workforce operations, timesheet aggregation, and payroll reporting delays at {contact.current_company}."
-        else:
-            prob_text = f"Operational workflow bottlenecks and systems optimization at {contact.current_company}."
+        elif is_coach and "platform" not in prob_text.lower() and "course" not in prob_text.lower():
+            prob_text = f"{prob_text.rstrip('.')}; structured digital course delivery platform and certification assessment workflows for coaching cohorts."
     else:
-        prob_text = "Operational workflow bottlenecks and systems optimization."
+        # Strictly preserve unverified state: Never fabricate an operational problem when unverified
+        prob_text = "No verified business problem identified."
 
     name = snapshot.get("name") or (contact.full_name if contact else "Connection")
     company = snapshot.get("current_organization") or (contact.current_company if contact else "")

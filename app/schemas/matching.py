@@ -109,3 +109,4 @@ class SemanticProductMatchResponse(BaseModel):
     validation_questions: List[str] = Field(default_factory=list)
     recommended_next_step: Optional[str] = None
     capability_gap: Optional[str] = None
+    proposed_solution: Optional[str] = None
