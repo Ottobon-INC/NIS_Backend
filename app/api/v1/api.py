@@ -12,6 +12,7 @@ from app.api.v1.endpoints import (
     introductions,
     cockpit,
     matching,
+    platform,
 )
 
 api_router = APIRouter()
@@ -36,3 +37,7 @@ api_router.include_router(cockpit.router, prefix="/cockpit", tags=["founder cock
 
 # Problem Matching
 api_router.include_router(matching.router, prefix="/matching", tags=["problem matching"])
+
+# Platform & Products
+api_router.include_router(platform.router, tags=["platform"])
+
