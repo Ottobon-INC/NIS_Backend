@@ -1,5 +1,6 @@
 import sys
-sys.path.insert(0, r'c:\Users\poorv\OneDrive\Desktop\NetworkOS\NIS_Backend')
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import asyncio
 import json
 from app.db.session import AsyncSessionLocal

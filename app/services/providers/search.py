@@ -1,9 +1,6 @@
 from typing import Dict, Any, Optional
 from app.services.providers.base import ResearchProvider
-try:
-    from ddgs import DDGS
-except ImportError:
-    from duckduckgo_search import DDGS
+from duckduckgo_search import DDGS
 import logging
 import asyncio
 
@@ -13,67 +10,50 @@ class DuckDuckGoProvider(ResearchProvider):
     def get_provider_metadata(self) -> Dict[str, Any]:
         return {
             "source_id": "duckduckgo",
-            "name": "DuckDuckGo Search",
+            "name": "DuckDuckGo Web Search",
             "provider_type": "EXTERNAL_API",
             "supported_entity_types": ["person", "company"],
-            "supported_intelligence_types": ["public_web", "news"],
+            "supported_intelligence_types": ["public_web", "news", "executive_mentions"],
             "requires_api_key": False,
             "requires_paid_license": False
         }
 
-    async def fetch_public_webpage(self, url: str) -> Dict[str, Any]:
-        query = url
+    async def search_person(self, query: str) -> Dict[str, Any]:
+        """Searches DuckDuckGo for the person or targeted query."""
+        clean_query = query.strip()
         try:
-            results = []
-            try:
-                def sync_search():
-                    with DDGS() as ddgs:
-                        return list(ddgs.text(query, max_results=5))
-                results = await asyncio.to_thread(sync_search)
-            except Exception as ddg_err:
-                logger.warning(f"DDGS direct search failed: {ddg_err}, using AgentReachCLI fallback")
+            def sync_search():
+                return list(DDGS().text(clean_query, max_results=4))
 
-            if results:
-                combined_text = "\n\n".join([f"Title: {r.get('title', '')}\nBody: {r.get('body', '')}\nURL: {r.get('href', '')}" for r in results])
+            results = await asyncio.to_thread(sync_search)
+            if not results:
                 return {
                     "status": "SUCCESS",
-                    "final_url": f"https://duckduckgo.com/?q={query}",
-                    "http_status": 200,
-                    "content_type": "text/plain",
-                    "title": f"Search Results for {query}",
-                    "meta_description": "",
-                    "text_content": combined_text
+                    "final_url": f"https://duckduckgo.com/?q={clean_query}",
+                    "records_count": 0,
+                    "text_content": f"No search results returned for query '{clean_query}'.",
+                    "extracted_data": {"results": []}
                 }
-            
-            # Robust fallback using AgentReachCLI web search
-            from app.core.agent_reach_cli import AgentReachCLI
-            fb = await AgentReachCLI.execute_search("web", query)
-            if fb.get("status") == "SUCCESS" and fb.get("data", {}).get("raw_text"):
-                return {
-                    "status": "SUCCESS",
-                    "final_url": f"https://duckduckgo.com/?q={query}",
-                    "http_status": 200,
-                    "content_type": "text/plain",
-                    "title": f"Search Results for {query}",
-                    "meta_description": "",
-                    "text_content": fb["data"]["raw_text"][:30000]
-                }
+
+            combined_text = "\n\n".join([f"Title: {r['title']}\nSnippet: {r['body']}\nSource URL: {r['href']}" for r in results])
+            top_url = results[0]["href"] if results else f"https://duckduckgo.com/?q={clean_query}"
 
             return {
                 "status": "SUCCESS",
-                "final_url": f"https://duckduckgo.com/?q={query}",
+                "final_url": top_url,
                 "http_status": 200,
                 "content_type": "text/plain",
-                "title": f"Search Results for {query}",
-                "meta_description": "",
-                "text_content": f"Executive and professional query context for {query}"
+                "title": f"DuckDuckGo Search: {clean_query}",
+                "meta_description": results[0].get("body", "") if results else "",
+                "text_content": combined_text,
+                "records_count": len(results),
+                "extracted_data": {
+                    "results": results
+                }
             }
         except Exception as e:
-            logger.error(f"DDG Search error: {e}")
+            logger.error(f"DDG Search error for {clean_query}: {e}")
             return {"status": "ERROR", "error": str(e)}
 
-    def search_person(self, query: str): raise NotImplementedError()
-    def search_company(self, query: str): raise NotImplementedError()
-    def fetch_person(self, identifier: str): raise NotImplementedError()
-    def fetch_company(self, identifier: str): raise NotImplementedError()
-    def fetch_signals(self, query: str): raise NotImplementedError()
+    async def fetch_public_webpage(self, url: str) -> Dict[str, Any]:
+        return await self.search_person(url)

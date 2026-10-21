@@ -1,9 +1,6 @@
 import re
 import logging
 from typing import List, Dict, Any, Optional
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.core.config import settings
 from app.schemas.matching import (
@@ -56,6 +53,9 @@ class ConversationIntelligenceService:
 
     @classmethod
     async def _extract_with_llm(cls, content: str, source_filename: str) -> Optional[CompanyProfileAnalysis]:
+        from langchain_openai import ChatOpenAI
+        from langchain_core.prompts import ChatPromptTemplate
+
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=settings.OPENAI_API_KEY)
 
         system_prompt = """You are a rigorous commercial opportunity intelligence analyst for NetworkOS.
@@ -92,7 +92,7 @@ CRITICAL VERIFICATION RULES:
     ) -> CompanyProfileAnalysis:
         # Heuristic / deterministic extraction based on document signatures
         lines = [line.strip() for line in text.split("\n") if line.strip()]
-        
+
         company_name = "Target Enterprise"
         industry = "Technology / Enterprise"
         business_model = "B2B SaaS / Services"

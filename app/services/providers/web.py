@@ -1,5 +1,6 @@
-import logging
 import httpx
+import logging
+import os
 from bs4 import BeautifulSoup
 from typing import Dict, Any, Optional
 from app.services.providers.base import ResearchProvider
@@ -20,83 +21,6 @@ class GeneralWebProvider(ResearchProvider):
             "requires_paid_license": False
         }
 
-    def _extract_linkedin_profile_data(self, url: str, status_code: int, soup: BeautifulSoup) -> Dict[str, Any]:
-        import re
-        def get_meta(prop: str) -> str:
-            tag = soup.find('meta', property=prop) or soup.find('meta', attrs={'name': prop})
-            return tag.get('content', '').strip() if tag else ''
-
-        title = get_meta('og:title') or (soup.title.string if soup.title else '')
-        desc = get_meta('og:description') or get_meta('description')
-        image = get_meta('og:image')
-        first_name = get_meta('profile:first_name')
-        last_name = get_meta('profile:last_name')
-        canonical_url = get_meta('og:url') or url
-
-        full_name = f"{first_name} {last_name}".strip() if (first_name or last_name) else ""
-        company = ""
-        role = ""
-        location = ""
-        education = ""
-
-        if not full_name and "-" in title:
-            parts = title.split("|")[0].split("-")
-            full_name = parts[0].strip()
-            if len(parts) > 1:
-                company = parts[1].strip()
-        elif "-" in title:
-            parts = title.split("|")[0].split("-")
-            if len(parts) > 1:
-                company = parts[1].strip()
-
-        if desc:
-            m_exp = re.search(r'Experience:\s*([^·\n]+)', desc)
-            if m_exp:
-                exp_c = m_exp.group(1).strip()
-                if exp_c:
-                    company = exp_c
-
-            m_role = re.search(r'as an?\s+([^,\.·\n]+)', desc, re.IGNORECASE)
-            if m_role:
-                role = m_role.group(1).strip()
-
-            m_loc = re.search(r'Location:\s*([^·\n]+)', desc)
-            if m_loc:
-                location = m_loc.group(1).strip()
-
-            m_edu = re.search(r'Education:\s*([^·\n]+)', desc)
-            if m_edu:
-                education = m_edu.group(1).strip()
-
-        structured_text = f"""
-PRIMARY VERIFIED SOURCE - DIRECT LINKEDIN PROFILE SCRAPED:
-- Profile URL: {url}
-- Full Name: {full_name}
-- Current Job Role: {role or 'Professional'}
-- Current Organization / Company: {company or 'Independent'}
-- Location: {location or 'Unknown'}
-- Education: {education}
-- Official Summary & Bio: {desc}
-- Verified Profile Image: {image}
-"""
-        return {
-            "status": "SUCCESS",
-            "final_url": canonical_url,
-            "http_status": status_code,
-            "content_type": "text/html",
-            "title": title,
-            "meta_description": desc,
-            "text_content": structured_text.strip(),
-            "extracted_data": {
-                "name": full_name,
-                "role": role,
-                "company": company,
-                "location": location,
-                "education": education,
-                "image_url": image
-            }
-        }
-
     async def fetch_public_webpage(self, url: str) -> Dict[str, Any]:
         try:
             safe_url = validate_url_security(url)
@@ -106,44 +30,72 @@ PRIMARY VERIFIED SOURCE - DIRECT LINKEDIN PROFILE SCRAPED:
         timeout = getattr(settings, "WEB_REQUEST_TIMEOUT_SECONDS", 15)
         max_bytes = getattr(settings, "WEB_MAX_RESPONSE_BYTES", 5 * 1024 * 1024)
 
-        is_linkedin = "linkedin.com" in safe_url.lower()
-        headers = {
-            "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5"
-        } if is_linkedin else {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
-        }
+        # 1. Attempt high-fidelity asynchronous crawling via Crawl4AI (in non-test or production mode)
+        if os.environ.get("ENV") != "test":
+            try:
+                from app.services.web.crawler import CrawlerService
+                res = await CrawlerService.scrape_page(safe_url, timeout_ms=int(timeout * 1000))
+                if res and res.get("success"):
+                    status_code = res.get("status_code", 200)
+                    if status_code == 404:
+                        return {"status": "NOT_FOUND"}
+                    elif status_code in [401, 403]:
+                        return {"status": "BLOCKED"}
+                    elif status_code == 429:
+                        return {"status": "RATE_LIMITED"}
 
+                    markdown_content = res.get("markdown", "")
+                    title = res.get("title", "")
+                    text_content = markdown_content if markdown_content else res.get("html", "")
+                    return {
+                        "status": "SUCCESS",
+                        "final_url": res.get("url", safe_url),
+                        "http_status": status_code,
+                        "content_type": "text/markdown",
+                        "title": title,
+                        "meta_description": "",
+                        "text_content": text_content[:50000],
+                        "links": res.get("links", []),
+                        "media": res.get("media", [])
+                    }
+            except Exception as crawler_err:
+                logger.info(f"Crawl4AI not active or failed for {safe_url}: {crawler_err}. Falling back to HTTP client.")
+
+        # 2. Resilient fallback: Standard asynchronous HTTP client + BeautifulSoup
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                resp = await client.get(safe_url, headers=headers)
+                resp = await client.get(safe_url, headers={"User-Agent": "NetworkOS/1.0"})
                 resp.raise_for_status()
-                
+
                 content_len = resp.headers.get("Content-Length")
                 if content_len and int(content_len) > max_bytes:
                     return {"status": "UNSUPPORTED_CONTENT", "error": "Response too large"}
-                    
+
                 html = resp.text
                 if len(html) > max_bytes:
                     return {"status": "UNSUPPORTED_CONTENT", "error": "Response too large"}
 
                 soup = BeautifulSoup(html, "html.parser")
-
-                if is_linkedin:
-                    return self._extract_linkedin_profile_data(safe_url, resp.status_code, soup)
-
                 for tag in soup(["script", "style", "nav", "footer", "header"]):
                     tag.decompose()
-                    
-                title = soup.title.string if soup.title else ""
+
+                title = soup.title.string.strip() if soup.title and soup.title.string else ""
                 meta_desc = ""
                 meta_tag = soup.find("meta", attrs={"name": "description"})
                 if meta_tag:
-                    meta_desc = meta_tag.get("content", "")
-                
-                text_content = soup.get_text(separator=" ", strip=True)
-                
+                    meta_desc = meta_tag.get("content", "").strip()
+
+                body_text = soup.get_text(separator=" ", strip=True)
+                structured_parts = []
+                if title:
+                    structured_parts.append(f"Title: {title}")
+                if meta_desc:
+                    structured_parts.append(f"Summary / Experience: {meta_desc}")
+                if body_text:
+                    structured_parts.append(body_text)
+
+                text_content = "\n\n".join(structured_parts)
+
                 return {
                     "status": "SUCCESS",
                     "final_url": str(resp.url),
@@ -153,78 +105,17 @@ PRIMARY VERIFIED SOURCE - DIRECT LINKEDIN PROFILE SCRAPED:
                     "meta_description": meta_desc,
                     "text_content": text_content[:50000]
                 }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return {"status": "NOT_FOUND"}
+            elif e.response.status_code in [401, 403]:
+                return {"status": "BLOCKED"}
+            elif e.response.status_code == 429:
+                return {"status": "RATE_LIMITED"}
+            return {"status": "ERROR", "error": f"HTTP {e.response.status_code}"}
+        except httpx.TimeoutException:
+            return {"status": "TIMEOUT"}
         except Exception as e:
-            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 404:
-                return {"status": "NOT_FOUND", "error": str(e)}
-
-            # For LinkedIn, attempt direct fallback with urllib using social crawler agent
-            if is_linkedin:
-                try:
-                    import urllib.request
-                    import asyncio
-                    def fetch_urllib():
-                        req = urllib.request.Request(safe_url, headers=headers)
-                        with urllib.request.urlopen(req, timeout=timeout) as u_resp:
-                            return u_resp.read().decode('utf-8', errors='ignore'), u_resp.status
-                    u_html, u_status = await asyncio.to_thread(fetch_urllib)
-                    if u_html:
-                        u_soup = BeautifulSoup(u_html, "html.parser")
-                        return self._extract_linkedin_profile_data(safe_url, u_status, u_soup)
-                except Exception as u_err:
-                    logger.warning(f"urllib direct LinkedIn scrape failed: {u_err}")
-            # Fallback for sites that block automated scraping (e.g. LinkedIn HTTP 999/403)
-            logger.info(f"GeneralWebProvider direct fetch encountered: {e}. Attempting search fallback for {url}")
-            try:
-                import re
-                slug_match = re.search(r'in/([^/?#]+)', url)
-                slug = slug_match.group(1).strip() if slug_match else ""
-                search_term = slug.replace('-', ' ') if slug else url
-
-                try:
-                    from ddgs import DDGS
-                except ImportError:
-                    from duckduckgo_search import DDGS
-
-                ddgs_results = []
-                try:
-                    import asyncio
-                    def sync_ddgs():
-                        with DDGS() as ddgs:
-                            res = list(ddgs.text(f'"{search_term}"', max_results=5))
-                            if not res and slug:
-                                res = list(ddgs.text(search_term, max_results=5))
-                            return res
-                    ddgs_results = await asyncio.to_thread(sync_ddgs)
-                except Exception as ddg_e:
-                    logger.warning(f"DDGS search failed in web provider fallback: {ddg_e}")
-
-                if ddgs_results:
-                    combined = "\n\n".join([f"Title: {r.get('title', '')}\nBody: {r.get('body', '')}\nURL: {r.get('href', '')}" for r in ddgs_results])
-                    return {
-                        "status": "SUCCESS",
-                        "final_url": url,
-                        "http_status": 200,
-                        "content_type": "text/plain",
-                        "title": f"Web Footprint for {search_term}",
-                        "meta_description": "",
-                        "text_content": combined[:30000]
-                    }
-
-                from app.core.agent_reach_cli import AgentReachCLI
-                fb = await AgentReachCLI.execute_search("web", f'"{search_term}"')
-                if fb.get("status") == "SUCCESS" and fb.get("data", {}).get("raw_text"):
-                    return {
-                        "status": "SUCCESS",
-                        "final_url": url,
-                        "http_status": 200,
-                        "content_type": "text/plain",
-                        "title": f"Web Footprint for {search_term}",
-                        "meta_description": "",
-                        "text_content": fb["data"]["raw_text"][:30000]
-                    }
-            except Exception as fb_err:
-                logger.warning(f"Fallback error in GeneralWebProvider: {fb_err}")
-
             return {"status": "ERROR", "error": str(e)}
 
     def search_person(self, query: str): raise NotImplementedError()

@@ -392,5 +392,3 @@ def test_domain_classification_never_returns_non_matching():
         domain = SemanticProductMatcherService._classify_domain(problem)
         assert domain == expected_domain
         assert "non-matching" not in domain.lower()
-
-

@@ -39,6 +39,7 @@ class ContactOverviewSchema(BaseModel):
     current_company: Optional[str] = None
     profile_url: Optional[str] = None
     status: str
+    contact_type: Optional[str] = None
     lastUpdated: str
 
 class Contact360(BaseModel):

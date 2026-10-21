@@ -70,7 +70,6 @@ class CompanyMatchingResult(BaseModel):
     validation_questions: List[str] = Field(default_factory=list)
     recommended_next_step: str
 
-
 class ProductMatchItem(BaseModel):
     product_id: str
     product_name: str
@@ -85,14 +84,12 @@ class ProductMatchItem(BaseModel):
     assumptions_or_prerequisites: List[str] = Field(default_factory=list)
     suggested_first_step: str
 
-
 class SemanticProblemMatchRequest(BaseModel):
     problem_text: str
     connection_id: Optional[str] = None
     connection_name: Optional[str] = None
     connection_company: Optional[str] = None
     connection_title: Optional[str] = None
-
 
 class SemanticProductMatchResponse(BaseModel):
     connection_id: Optional[str] = None
@@ -112,4 +109,3 @@ class SemanticProductMatchResponse(BaseModel):
     validation_questions: List[str] = Field(default_factory=list)
     recommended_next_step: Optional[str] = None
     capability_gap: Optional[str] = None
-
