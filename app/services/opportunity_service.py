@@ -225,6 +225,18 @@ class OpportunityService:
             if contact:
                 opp.contact = contact
 
+        # Attach linked scraped jobs for job links and provenance
+        try:
+            from app.models.scraped_job import ScrapedJob
+            job_stmt = select(ScrapedJob).where(
+                ScrapedJob.opportunity_id == opportunity_id,
+                ScrapedJob.organization_id == organization_id
+            )
+            scraped_jobs = (await db.execute(job_stmt)).scalars().all()
+            opp.scraped_jobs = list(scraped_jobs)
+        except Exception as e:
+            opp.scraped_jobs = []
+
         return opp
 
     @classmethod

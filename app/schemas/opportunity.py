@@ -140,6 +140,65 @@ def _normalize_opportunity_input(data: Any) -> Any:
     # Array fields
     raw_tc_ids = get_val("trusted_context_ids", ["trusted_context_ids", "trustedContextIds"], [])
     raw_ev_ids = get_val("supporting_evidence_ids", ["supporting_evidence_ids", "supportingEvidenceIds"], [])
+    clean_ev_ids = [str(x) for x in (raw_ev_ids if isinstance(raw_ev_ids, list) else [])]
+
+    # Process linked scraped jobs
+    raw_jobs = get_val("scraped_jobs", ["scraped_jobs", "scrapedJobs"], []) or []
+    scraped_jobs_list = []
+    for j in raw_jobs:
+        if hasattr(j, "apply_url"):
+            j_apply = j.apply_url
+            j_id = getattr(j, "id", "")
+            j_src = getattr(j, "source", "")
+            j_ext = getattr(j, "external_id", "")
+            j_canon = getattr(j, "canonical_apply_url", None)
+            j_loc = getattr(j, "location", None)
+            j_sal = getattr(j, "salary", None)
+            j_stat = getattr(j, "status", None)
+            j_pub = getattr(j, "published_at", None)
+            j_pub_str = j_pub.isoformat() if isinstance(j_pub, datetime) else (str(j_pub) if j_pub else None)
+        elif isinstance(j, dict):
+            j_apply = j.get("apply_url") or j.get("applyUrl") or ""
+            j_id = j.get("id", "")
+            j_src = j.get("source", "")
+            j_ext = j.get("external_id") or j.get("externalId") or ""
+            j_canon = j.get("canonical_apply_url") or j.get("canonicalApplyUrl")
+            j_loc = j.get("location")
+            j_sal = j.get("salary")
+            j_stat = j.get("status")
+            j_pub = j.get("published_at") or j.get("publishedAt")
+            j_pub_str = str(j_pub) if j_pub else None
+        else:
+            continue
+
+        scraped_jobs_list.append({
+            "id": str(j_id),
+            "source": str(j_src),
+            "externalId": str(j_ext),
+            "applyUrl": str(j_apply),
+            "canonicalApplyUrl": str(j_canon) if j_canon else None,
+            "location": str(j_loc) if j_loc else None,
+            "salary": str(j_sal) if j_sal else None,
+            "status": str(j_stat) if j_stat else "ACTIVE",
+            "publishedAt": j_pub_str,
+        })
+        if j_apply and str(j_apply) not in clean_ev_ids:
+            clean_ev_ids.append(str(j_apply))
+
+    # Extract apply_url
+    apply_url = None
+    for item in clean_ev_ids:
+        if str(item).startswith("http://") or str(item).startswith("https://"):
+            apply_url = str(item)
+            break
+    if not apply_url and scraped_jobs_list:
+        apply_url = scraped_jobs_list[0].get("applyUrl")
+    if not apply_url:
+        desc_text = get_val("description", ["description"], "") or ""
+        import re
+        match = re.search(r"(?:Direct Apply|Apply|URL):\s*(https?://[^\s\n\r\)]+)", desc_text, re.IGNORECASE)
+        if match:
+            apply_url = match.group(1).strip()
 
     return {
         "id": str(opp_id),
@@ -161,6 +220,9 @@ def _normalize_opportunity_input(data: Any) -> Any:
         "createdAt": c_at_str,
         "updatedAt": u_at_str,
         "lifecycleStatus": be_status,
+        "supportingEvidenceIds": clean_ev_ids,
+        "applyUrl": apply_url,
+        "scrapedJobs": scraped_jobs_list,
         # Detail fields passed through for OpportunityDetailOut
         "description": get_val("description", ["description"]),
         "organizationId": str(get_val("organization_id", ["organization_id", "organizationId"], "org-1")),
@@ -171,7 +233,6 @@ def _normalize_opportunity_input(data: Any) -> Any:
         "matchRationale": get_val("match_rationale", ["match_rationale", "matchRationale"]),
         "deliveryPath": get_val("delivery_path", ["delivery_path", "deliveryPath", "selected_path", "selectedPath"]),
         "selectedSolutionId": get_val("selected_solution_id", ["selected_solution_id", "selectedSolutionId"]),
-        "supportingEvidenceIds": [str(x) for x in (raw_ev_ids if isinstance(raw_ev_ids, list) else [])],
         "reviewNotes": get_val("review_notes", ["review_notes", "reviewNotes"]),
         "reviewedBy": get_val("reviewed_by", ["reviewed_by", "reviewedBy"]),
         "reviewedAt": r_at_str,
@@ -234,6 +295,10 @@ class OpportunityOut(BaseModel):
     lifecycleStatus: Optional[OpportunityLifecycleStatus] = None
     deliveryPath: Optional[str] = None
     selectedSolutionId: Optional[str] = None
+    supportingEvidenceIds: List[str] = Field(default_factory=list)
+    applyUrl: Optional[str] = None
+    description: Optional[str] = None
+    scrapedJobs: List[Dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
