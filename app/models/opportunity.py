@@ -39,15 +39,17 @@ class Opportunity(Base):
         self._person_name = kwargs.pop("person_name", None)
         self._relationship_id = kwargs.pop("relationship_id", None)
         self._source_meeting_id = kwargs.pop("source_meeting_id", None)
-        self._selected_path = kwargs.pop("selected_path", None)
-        self._selected_solution_id = kwargs.pop("selected_solution_id", None)
         self._outcome_status = kwargs.pop("outcome_status", None)
         self._outcome_notes = kwargs.pop("outcome_notes", None)
+
+        # Allow selected_path as alias for delivery_path
+        if "selected_path" in kwargs and "delivery_path" not in kwargs:
+            kwargs["delivery_path"] = kwargs.pop("selected_path")
 
         kwargs.setdefault("status", OpportunityLifecycleStatus.DISCOVERED)
         super().__init__(**kwargs)
 
-    # Database-backed columns matching PostgreSQL schema exactly (27 columns)
+    # Database-backed columns matching PostgreSQL schema
     id = Column(String, primary_key=True, index=True)
     organization_id = Column(String, index=True, default="ottobon")
     owner_user_id = Column(String, nullable=True)
@@ -81,6 +83,10 @@ class Opportunity(Base):
     match_score = Column(Integer, nullable=True)
     match_rationale = Column(Text, nullable=True)
 
+    # Delivery path and selected capability/solution
+    delivery_path = Column(String, nullable=True, index=True)  # INTERNAL, NETWORK, HYBRID
+    selected_solution_id = Column(String, nullable=True)
+
     # Traceability & evidence
     supporting_evidence_ids = Column(JSON, default=list)
     trusted_context_ids = Column(JSON, default=list)
@@ -97,6 +103,7 @@ class Opportunity(Base):
 
     # Synonym and unmapped compatibility properties
     person_id = synonym("contact_id")
+    selected_path = synonym("delivery_path")
 
     @property
     def person_name(self) -> Optional[str]:
@@ -125,22 +132,6 @@ class Opportunity(Base):
     @source_meeting_id.setter
     def source_meeting_id(self, val: Optional[str]):
         self._source_meeting_id = val
-
-    @property
-    def selected_path(self) -> Optional[str]:
-        return getattr(self, "_selected_path", None)
-
-    @selected_path.setter
-    def selected_path(self, val: Optional[str]):
-        self._selected_path = val
-
-    @property
-    def selected_solution_id(self) -> Optional[str]:
-        return getattr(self, "_selected_solution_id", None)
-
-    @selected_solution_id.setter
-    def selected_solution_id(self, val: Optional[str]):
-        self._selected_solution_id = val
 
     @property
     def outcome_status(self) -> Optional[str]:

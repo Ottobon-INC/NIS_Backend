@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from datetime import datetime, timezone
 
 from app.db.session import get_db
@@ -13,75 +14,19 @@ from app.schemas.opportunity import (
     OpportunityCreateIn,
     OpportunityValidateIn,
     OpportunityValidationResponse,
+    OpportunityPathIn,
+    OpportunityPathResponse,
+    CapabilityMatchesResponse,
+    CapabilityMatchUpdateIn,
+    OpportunitySolutionsResponse,
+    OpportunitySearchResult,
+    OpportunitySearchResponse,
     to_frontend_status,
 )
 from app.services.opportunity_service import OpportunityService
+from app.services.opportunity_search import OpportunitySearchService
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
-
-# Default seed opportunities for live search and prototype demos
-DEFAULT_SEED_OPPORTUNITIES = [
-    {
-        "id": "opp-sap-migration-01",
-        "title": "Autonomous ERP Migration & Process Automation",
-        "personId": "c-rahul-dhamdhere",
-        "personName": "Rahul Dhamdhere",
-        "companyId": "comp-sap-global",
-        "companyName": "Global Logistics Corp",
-        "relationshipId": "rel-01",
-        "sourceMeetingId": "meet-101",
-        "trustedContextIds": ["tc-sap-legacy-pain", "tc-q3-budget-approved"],
-        "problem": "Legacy SAP ECC to S/4HANA migration is stalling due to 200+ undocumented custom ABAP workflows.",
-        "requirement": "Agentic code translation and automatic regression testing for logistics EDI pipelines.",
-        "timeline": "Q3 2026 Delivery Mandate",
-        "budgetSignal": "$250k - $400k allocated pilot budget",
-        "opportunityType": "ENTERPRISE_AI_PILOT",
-        "confidence": 92,
-        "status": "VALIDATED",
-        "createdAt": "2026-03-10T10:00:00Z",
-        "updatedAt": "2026-03-15T14:30:00Z"
-    },
-    {
-        "id": "opp-fintech-fraud-02",
-        "title": "Real-time Cross-Border Fraud Intelligence",
-        "personId": "c-david-chen",
-        "personName": "David Chen",
-        "companyId": "comp-apex-fin",
-        "companyName": "Apex Financial Group",
-        "relationshipId": "rel-02",
-        "sourceMeetingId": "meet-102",
-        "trustedContextIds": ["tc-compliance-audit"],
-        "problem": "Cross-border payment latency increasing fraud false-positive rates by 34%.",
-        "requirement": "Sub-100ms streaming LLM decision node integrated into existing SWIFT messaging gateways.",
-        "timeline": "Next 60 Days",
-        "budgetSignal": "Enterprise strategic innovation fund",
-        "opportunityType": "STRATEGIC_INTELLIGENCE",
-        "confidence": 88,
-        "status": "CANDIDATE",
-        "createdAt": "2026-03-18T09:15:00Z",
-        "updatedAt": "2026-03-19T11:20:00Z"
-    },
-    {
-        "id": "opp-supplychain-visibility-03",
-        "title": "Predictive Port Logistics & Demurrage Shield",
-        "personId": "c-priya-sharma",
-        "personName": "Priya Sharma",
-        "companyId": "comp-meridian-freight",
-        "companyName": "Meridian Freight Solutions",
-        "relationshipId": "rel-03",
-        "sourceMeetingId": "meet-103",
-        "trustedContextIds": ["tc-port-congestion-spike"],
-        "problem": "Unpredictable container dwell times causing over $1.2M in annual demurrage penalties.",
-        "requirement": "Predictive demurrage alert system feeding directly into carrier dispatch queues.",
-        "timeline": "Immediate (Current Fiscal Quarter)",
-        "budgetSignal": "Operations OPEX reduction allocation",
-        "opportunityType": "PREDICTIVE_LOGISTICS",
-        "confidence": 84,
-        "status": "CANDIDATE",
-        "createdAt": "2026-03-22T08:00:00Z",
-        "updatedAt": "2026-03-22T08:00:00Z"
-    }
-]
 
 
 # ==============================================================================
@@ -159,69 +104,32 @@ async def derive_opportunity(
 # Live Search & Pipeline Prototypes (Preserved)
 # ==============================================================================
 
-@router.get("/search")
+@router.get("/search", response_model=OpportunitySearchResponse)
 async def live_opportunity_search(
     q: str = Query("", description="Live search keyword across problem, requirement, company, or person"),
     status: Optional[str] = Query(None, description="Filter by opportunity status"),
     min_confidence: int = Query(0, ge=0, le=100, description="Minimum confidence threshold"),
     opportunity_type: Optional[str] = Query(None, description="Filter by opportunity type"),
+    limit: int = Query(50, ge=1, le=100, description="Page limit"),
+    offset: int = Query(0, ge=0, description="Page offset"),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     """
     Live Opportunity Search Engine:
-    Performs real-time faceted search across all active opportunities, validated needs,
-    associated contacts, and origin problem definitions.
+    Performs real-time database-backed faceted search across all active opportunities,
+    validated needs, associated contacts, and origin problem definitions.
     """
-    query_str = q.strip().lower()
-    matches = []
-
-    for opp in DEFAULT_SEED_OPPORTUNITIES:
-        if status and opp["status"].upper() != status.upper():
-            continue
-        if opp["confidence"] < min_confidence:
-            continue
-        if opportunity_type and opp["opportunityType"].upper() != opportunity_type.upper():
-            continue
-
-        # Score relevance
-        score = 0
-        match_reasons = []
-
-        if not query_str:
-            score = 100
-        else:
-            if query_str in opp["title"].lower():
-                score += 50
-                match_reasons.append("Title match")
-            if query_str in opp["companyName"].lower():
-                score += 40
-                match_reasons.append(f"Company: {opp['companyName']}")
-            if query_str in opp["personName"].lower():
-                score += 35
-                match_reasons.append(f"Champion: {opp['personName']}")
-            if query_str in opp["problem"].lower():
-                score += 30
-                match_reasons.append("Problem description match")
-            if query_str in opp["requirement"].lower():
-                score += 25
-                match_reasons.append("Requirement match")
-
-        if score > 0:
-            matches.append({
-                **opp,
-                "relevanceScore": score,
-                "matchReasons": match_reasons or ["General inquiry match"]
-            })
-
-    # Sort by relevance descending
-    matches.sort(key=lambda x: x.get("relevanceScore", 0), reverse=True)
-
-    return {
-        "query": q,
-        "total": len(matches),
-        "results": matches
-    }
+    return await OpportunitySearchService.search_opportunities(
+        db=db,
+        organization_id=user["organization_id"],
+        q=q,
+        status=status,
+        min_confidence=min_confidence,
+        opportunity_type=opportunity_type,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/pipeline")
@@ -240,6 +148,67 @@ async def get_opportunity_pipeline(
                 "nextAction": "Schedule Technical Architecture Deep-Dive"
             }
         ]
+    }
+
+
+# ==============================================================================
+# Job Scraping Pipeline Management Endpoints
+# ==============================================================================
+
+@router.post("/scrape-jobs/trigger")
+async def trigger_job_scrape(
+    user: dict = Depends(get_current_user),
+):
+    """
+    Manually triggers the official job board scraping and ingestion pipeline.
+    Deduplicates across sources, creates Opportunities, and updates the scraped_jobs ledger.
+    """
+    from app.workers.job_scraper_worker import PipelineExecutionManager
+    org_id = user.get("organization_id", "org-1")
+    result = await PipelineExecutionManager.execute_job(
+        organization_id=org_id,
+        trigger_source=f"API_USER_{user.get('user_id', 'unknown')}"
+    )
+    return {
+        "success": True,
+        "message": "Job scraping pipeline executed successfully",
+        "result": result
+    }
+
+
+@router.get("/scrape-jobs/status")
+async def get_job_scrape_status(
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Returns the execution status, last run statistics, and ledger summary for scraped jobs.
+    """
+    from app.workers.job_scraper_worker import PipelineExecutionManager
+    from app.models.scraped_job import ScrapedJob
+    from sqlalchemy import func
+
+    org_id = user.get("organization_id", "org-1")
+    engine_status = PipelineExecutionManager.get_status()
+
+    # Query database ledger stats
+    count_stmt = select(func.count(ScrapedJob.id)).where(ScrapedJob.organization_id == org_id)
+    total_jobs = (await db.execute(count_stmt)).scalar() or 0
+
+    sources_stmt = select(ScrapedJob.source, func.count(ScrapedJob.id)).where(
+        ScrapedJob.organization_id == org_id
+    ).group_by(ScrapedJob.source)
+    source_counts = {row[0]: row[1] for row in (await db.execute(sources_stmt)).fetchall()}
+
+    return {
+        "scheduler_configured": "02:00 AM Asia/Kolkata (Daily)",
+        "is_running": engine_status["is_running"],
+        "last_run_at": engine_status["last_run_at"],
+        "last_summary": engine_status["last_summary"],
+        "database_metrics": {
+            "total_scraped_jobs": total_jobs,
+            "jobs_by_source": source_counts
+        }
     }
 
 
@@ -286,50 +255,101 @@ async def validate_opportunity(
     )
 
 
-@router.get("/{opportunity_id}/solutions")
-async def get_solution_candidates(
+@router.get("/{opportunity_id}/capability-matches", response_model=CapabilityMatchesResponse)
+async def get_capability_matches(
     opportunity_id: str,
+    db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Get solution and capability candidates for an opportunity."""
+    """
+    Evaluates real capabilities, products, and services against the opportunity's
+    verified problem statement. Returns structured matches with alignment reasoning.
+    """
+    matches = await OpportunityService.get_capability_matches(
+        db=db,
+        opportunity_id=opportunity_id,
+        organization_id=user["organization_id"],
+    )
+    return CapabilityMatchesResponse(matches=matches)
+
+
+@router.patch("/{opportunity_id}/capability-matches/{match_id}")
+async def update_capability_match(
+    opportunity_id: str,
+    match_id: str,
+    payload: CapabilityMatchUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Updates the review status of a capability match (SELECTED, REJECTED, CANDIDATE)
+    and persists the chosen capability onto the opportunity record.
+    """
+    await OpportunityService.update_capability_match(
+        db=db,
+        opportunity_id=opportunity_id,
+        match_id=match_id,
+        status_val=payload.status,
+        organization_id=user["organization_id"],
+        user=user,
+    )
     return {
-        "solutions": [
-            {
-                "id": "sol-internal-01",
-                "name": "Ottobon Agentic Code Translation Pipeline",
-                "description": "Proprietary AST rewrite engine for enterprise SAP & COBOL modernisation.",
-                "type": "INTERNAL",
-                "matchScore": 95,
-                "evidenceId": "ev-capability-benchmark",
-                "trustLevel": "FACT"
-            },
-            {
-                "id": "sol-network-02",
-                "name": "CloudScale Systems (Network Partner)",
-                "description": "Preferred systems integrator for large enterprise cloud deployments.",
-                "type": "NETWORK",
-                "matchScore": 82,
-                "evidenceId": "ev-partner-history",
-                "trustLevel": "CONFIRMED"
-            }
-        ]
+        "success": True,
+        "opportunity_id": opportunity_id,
+        "match_id": match_id,
+        "status": payload.status.upper(),
     }
 
 
-@router.patch("/{opportunity_id}/path")
-async def set_opportunity_path(
+@router.get("/{opportunity_id}/solutions", response_model=OpportunitySolutionsResponse)
+async def get_solution_candidates(
     opportunity_id: str,
-    payload: dict,
+    db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Set the selected delivery/go-to-market path (INTERNAL, NETWORK, HYBRID)."""
-    return {"success": True, "opportunity_id": opportunity_id, "selected_path": payload.get("path")}
+    """
+    Get solution and capability candidates for an opportunity grounded in
+    authentic database offerings (INTERNAL, NETWORK, HYBRID).
+    """
+    solutions = await OpportunityService.get_solution_candidates(
+        db=db,
+        opportunity_id=opportunity_id,
+        organization_id=user["organization_id"],
+    )
+    return OpportunitySolutionsResponse(solutions=solutions)
+
+
+@router.patch("/{opportunity_id}/path", response_model=OpportunityPathResponse)
+async def set_opportunity_path(
+    opportunity_id: str,
+    payload: OpportunityPathIn,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Set and persist the selected delivery/go-to-market path (INTERNAL, NETWORK, HYBRID).
+    Enforces allowed path values and persists onto the opportunity record.
+    """
+    updated = await OpportunityService.set_delivery_path(
+        db=db,
+        opportunity_id=opportunity_id,
+        path=payload.path,
+        organization_id=user["organization_id"],
+        user=user,
+    )
+    return OpportunityPathResponse(
+        success=True,
+        opportunity_id=updated.id,
+        selected_path=updated.delivery_path,
+        delivery_path=updated.delivery_path,
+    )
 
 
 @router.post("/{opportunity_id}/outcome")
 async def record_opportunity_outcome(
     opportunity_id: str,
     payload: dict,
+    db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     """Record meeting or introduction outcome for feedback loop."""
@@ -339,3 +359,4 @@ async def record_opportunity_outcome(
         "outcome": payload.get("outcome"),
         "notes": payload.get("notes")
     }
+

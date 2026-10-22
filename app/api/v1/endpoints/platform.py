@@ -83,64 +83,7 @@ async def get_founder_decisions(
         }
     ]
 
-# --- Trusted Context ---
 
-@router.get("/contacts/{contact_id}/trusted-context")
-async def get_contact_trusted_context(
-    contact_id: str,
-    db: AsyncSession = Depends(get_db),
-    user: dict = Depends(get_current_user)
-):
-    stmt = select(Contact).where(Contact.id == contact_id, Contact.organization_id == user["organization_id"])
-    contact = (await db.execute(stmt)).scalars().first()
-
-    name = contact.full_name if contact else "Executive Contact"
-    company = contact.current_company if contact else "Target Enterprise"
-
-    return {
-        "items": [
-            {
-                "id": "tc-1",
-                "contactId": contact_id,
-                "type": "PROBLEM",
-                "currentVersion": 1,
-                "content": f"Enterprise AI agent compliance and validation bottleneck at scale.",
-                "evidence": f"Cross-verified across {company} leadership communications and public domain reporting.",
-                "sourceMeetingId": f"meet-{contact_id[:8]}",
-                "history": [
-                    {
-                        "version": 1,
-                        "content": f"Enterprise AI agent compliance and validation bottleneck at scale.",
-                        "timestamp": "2026-10-13T10:00:00Z"
-                    }
-                ]
-            },
-            {
-                "id": "tc-2",
-                "contactId": contact_id,
-                "type": "REQUIREMENT",
-                "currentVersion": 1,
-                "content": "Turnkey verification bridge requiring zero core platform disruption.",
-                "evidence": f"Bounded 2-week deliverable scoped for {name} ({company}).",
-                "sourceMeetingId": f"meet-{contact_id[:8]}",
-                "history": [
-                    {
-                        "version": 1,
-                        "content": "Turnkey verification bridge requiring zero core platform disruption.",
-                        "timestamp": "2026-10-13T10:00:00Z"
-                    }
-                ]
-            }
-        ]
-    }
-
-@router.patch("/trusted-context/{item_id}")
-async def update_trusted_context(
-    item_id: str,
-    payload: Dict[str, Any] = Body(...),
-    user: dict = Depends(get_current_user)
-):
-    return {"success": True}
 
 # --- Opportunities ---
 
@@ -199,134 +142,52 @@ async def get_opportunities_pipeline(user: dict = Depends(get_current_user)):
         ]
     }
 
-@router.get("/opportunities/{id}")
-async def get_opportunity_by_id(
-    id: str,
-    db: AsyncSession = Depends(get_db),
-    user: dict = Depends(get_current_user)
-):
-    contacts = (await db.execute(select(Contact).where(Contact.organization_id == user["organization_id"]))).scalars().all()
-    satya = next((c for c in contacts if "Satya" in (c.full_name or "")), None)
-
-    return {
-        "id": id,
-        "title": "Azure AI Agent Governance & Verification Pilot",
-        "personId": satya.id if satya else "2b892b5c-d98f-4953-b4b1-3bed4afab79d",
-        "personName": satya.full_name if satya else "Satya Nadella",
-        "companyId": "comp-msft",
-        "companyName": satya.current_company if satya else "Microsoft",
-        "relationshipId": "rel-1",
-        "sourceMeetingId": f"meet-{satya.id[:8]}" if satya else "meet-1",
-        "trustedContextIds": ["tc-1", "tc-2"],
-        "problem": "Enterprise clients deploying custom autonomous agents face audit and governance bottlenecks.",
-        "requirement": "Bounded plug-and-play governance validation module with turnkey Azure integration.",
-        "timeline": "Q4 2026",
-        "budgetSignal": "$12,000 – $15,000 Milestone Sprint",
-        "opportunityType": "Enterprise AI Solutions",
-        "confidence": 95,
-        "status": "QUALIFIED",
-        "createdAt": "2026-10-13T10:30:00Z",
-        "updatedAt": "2026-10-13T10:30:00Z"
-    }
-
-@router.patch("/opportunities/{id}/validate")
-async def validate_opportunity(id: str, payload: Dict[str, Any] = Body(...), user: dict = Depends(get_current_user)):
-    return {"success": True}
-
-@router.get("/opportunities/{id}/solutions")
-async def get_opportunity_solutions(id: str, user: dict = Depends(get_current_user)):
-    return {
-        "solutions": [
-            {
-                "id": "sol-1",
-                "name": "Enterprise Agent Verification Bridge",
-                "description": "Ottobon internal delivery capability for autonomous agent compliance and audit telemetry.",
-                "type": "INTERNAL",
-                "matchScore": 95,
-                "trustLevel": "CONFIRMED",
-                "evidenceId": "ev-1"
-            },
-            {
-                "id": "sol-2",
-                "name": "Azure Partner Ecosystem Squad",
-                "description": "Ecosystem network match with verified Microsoft cloud architecture credentials.",
-                "type": "NETWORK",
-                "matchScore": 90,
-                "trustLevel": "HYPOTHESIS"
-            }
-        ]
-    }
-
-@router.patch("/opportunities/{id}/path")
-async def set_opportunity_path(id: str, payload: Dict[str, Any] = Body(...), user: dict = Depends(get_current_user)):
-    return {"success": True}
-
-@router.post("/opportunities/{id}/outcome")
-async def post_opportunity_outcome(id: str, payload: Dict[str, Any] = Body(...), user: dict = Depends(get_current_user)):
-    return {"success": True}
-
-@router.get("/opportunities/{id}/capability-matches")
-async def get_opportunity_capability_matches(
-    id: str,
-    db: AsyncSession = Depends(get_db),
-    user: dict = Depends(get_current_user)
-):
-    opp = await get_opportunity_by_id(id, db=db, user=user)
-    problem_text = opp.get("problem", "Enterprise AI agent compliance and validation bottleneck at scale.")
-
-    match_res = await SemanticProductMatcherService.match_connection_problem(
-        problem_text=problem_text,
-        connection_name=opp.get("personName"),
-        connection_company=opp.get("companyName")
-    )
-
-    if match_res.matching_outcome == "NO_MATCH_FOUND" or not match_res.matches:
-        return {"matches": []}
-
-    out_matches = []
-    for idx, m in enumerate(match_res.matches):
-        out_matches.append({
-            "id": f"cmatch-{idx+1}",
-            "opportunityId": id,
-            "capabilityId": m.product_id,
-            "capabilityName": m.product_name,
-            "capabilityCategory": "PRODUCT",
-            "status": "CANDIDATE",
-            "confidence": m.match_score,
-            "capability": {
-                "id": m.product_id,
-                "name": m.product_name,
-                "category": "PRODUCT",
-                "description": m.why_this_product_solves_it,
-                "relevantExpertise": m.relevant_features,
-                "evidenceSource": m.category
-            },
-            "reasoning": {
-                "problemAlignment": m.alignment_level,
-                "requirementAlignment": m.alignment_level,
-                "technologyAlignment": m.alignment_level,
-                "industryAlignment": "STRONG",
-                "overallExplanation": m.why_this_product_solves_it
-            },
-            "evidenceIds": ["tc-1"]
-        })
-    return {"matches": out_matches}
-
-@router.patch("/opportunities/{id}/capability-matches/{match_id}")
-async def update_capability_match(id: str, match_id: str, payload: Dict[str, Any] = Body(...), user: dict = Depends(get_current_user)):
-    return {"success": True}
+# Opportunities routes are canonically owned and served by app.api.v1.endpoints.opportunities
 
 @router.get("/opportunities/{id}/network-matches")
-async def get_opportunity_network_matches(id: str, user: dict = Depends(get_current_user)):
+async def get_opportunity_network_matches(
+    id: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    from app.models.opportunity import Opportunity
+    from app.models.company_knowledge import Product, Capability
+    opp = (await db.execute(select(Opportunity).where(Opportunity.id == id))).scalars().first()
+    selected_cap = {
+        "id": "cap-1",
+        "name": "AI Applications & Backend Systems",
+        "category": "SERVICE",
+        "description": "Delivery of custom enterprise agent systems and verification bridges.",
+        "relevantExpertise": ["Generative AI", "Azure Architecture", "Governance", "API Integration"],
+        "evidenceSource": "Ottobon Capabilities Catalog 2026"
+    }
+    if opp and opp.selected_solution_id:
+        prod = (await db.execute(select(Product).where(Product.id == opp.selected_solution_id))).scalars().first()
+        if prod:
+            selected_cap = {
+                "id": prod.id,
+                "name": prod.name,
+                "category": "PRODUCT",
+                "description": prod.description or prod.tagline or "",
+                "relevantExpertise": [prod.name, "Enterprise Offering"],
+                "evidenceSource": "Internal Products Catalog"
+            }
+        else:
+            cap = (await db.execute(select(Capability).where(Capability.id == opp.selected_solution_id))).scalars().first()
+            if cap:
+                selected_cap = {
+                    "id": cap.id,
+                    "name": cap.name,
+                    "category": "CAPABILITY",
+                    "description": cap.description or "",
+                    "relevantExpertise": [cap.name, "Verified Capability"],
+                    "evidenceSource": "Internal Capabilities Catalog"
+                }
+    elif opp and opp.matched_product_name:
+        selected_cap["name"] = opp.matched_product_name
+
     return {
-        "selectedCapability": {
-            "id": "cap-1",
-            "name": "AI Applications & Backend Systems",
-            "category": "SERVICE",
-            "description": "Delivery of custom enterprise agent systems and verification bridges.",
-            "relevantExpertise": ["Generative AI", "Azure Architecture", "Governance", "API Integration"],
-            "evidenceSource": "Ottobon Capabilities Catalog 2026"
-        },
+        "selectedCapability": selected_cap,
         "matches": [
             {
                 "id": "nmatch-1",

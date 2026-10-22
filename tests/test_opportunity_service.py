@@ -696,3 +696,166 @@ async def test_derive_opportunity_rejects_empty_problem_dossier(db_session, test
         await db_session.execute(delete(SourceResult).where(SourceResult.id == sr.id))
         await db_session.execute(delete(Contact).where(Contact.id == cid))
         await db_session.commit()
+
+
+# ==============================================================================
+# 9. Capability Matching & Delivery Path Service Tests
+# ==============================================================================
+
+@pytest.mark.asyncio
+async def test_set_delivery_path_service(db_session, test_prefix):
+    """
+    Validates set_delivery_path enforces supported values (INTERNAL, NETWORK, HYBRID)
+    and rejects invalid delivery path values with 400.
+    """
+    org_id = f"org-path-{test_prefix}"
+    opp = Opportunity(
+        id=f"opp-path-{test_prefix}",
+        organization_id=org_id,
+        company_name="Path Enterprises",
+        title="Infrastructure Modernization",
+        problem="High latency monolithic microservices bottlenecks",
+        requirement="Cloud native refactoring",
+        status=OpportunityLifecycleStatus.DISCOVERED,
+        confidence=75
+    )
+    db_session.add(opp)
+    await db_session.commit()
+
+    try:
+        # Valid paths
+        for p in ["INTERNAL", "NETWORK", "HYBRID"]:
+            updated = await OpportunityService.set_delivery_path(
+                db=db_session,
+                opportunity_id=opp.id,
+                path=p,
+                organization_id=org_id
+            )
+            assert updated.delivery_path == p
+            assert updated.selected_path == p
+
+        # Invalid path rejected with 400
+        with pytest.raises(HTTPException) as exc_info:
+            await OpportunityService.set_delivery_path(
+                db=db_session,
+                opportunity_id=opp.id,
+                path="OFFSHORE_OUTSOURCE",
+                organization_id=org_id
+            )
+        assert exc_info.value.status_code == 400
+        assert "Supported values" in exc_info.value.detail
+
+    finally:
+        await db_session.execute(delete(Opportunity).where(Opportunity.id == opp.id))
+        await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_capability_matching_and_update_service(db_session, test_prefix):
+    """
+    Validates get_capability_matches evaluates database offerings and
+    update_capability_match persists selection and defaults delivery_path to INTERNAL.
+    """
+    org_id = f"org-cap-srv-{test_prefix}"
+    opp = Opportunity(
+        id=f"opp-cap-srv-{test_prefix}",
+        organization_id=org_id,
+        company_name="Pipeline Scale Corp",
+        title="Reporting Pipeline Modernization",
+        problem="Automated reporting data pipeline latency and manual CSV export delays",
+        requirement="Scheduled ETL aggregation with automated validation",
+        status=OpportunityLifecycleStatus.DISCOVERED,
+        confidence=80,
+        supporting_evidence_ids=["ev-srv-1"]
+    )
+    db_session.add(opp)
+    await db_session.commit()
+
+    try:
+        # 1. Evaluate matches
+        matches = await OpportunityService.get_capability_matches(
+            db=db_session,
+            opportunity_id=opp.id,
+            organization_id=org_id
+        )
+        assert len(matches) > 0
+        first_match = matches[0]
+        assert first_match.capability.name
+        assert first_match.reasoning.overallExplanation
+
+        # 2. Select match
+        ok = await OpportunityService.update_capability_match(
+            db=db_session,
+            opportunity_id=opp.id,
+            match_id=first_match.id,
+            status_val="SELECTED",
+            organization_id=org_id
+        )
+        assert ok is True
+
+        # Refresh opportunity and verify DB persistence
+        await db_session.refresh(opp)
+        assert opp.selected_solution_id == first_match.capabilityId
+        assert opp.delivery_path == "INTERNAL"
+
+        # 3. Reject match
+        ok_rej = await OpportunityService.update_capability_match(
+            db=db_session,
+            opportunity_id=opp.id,
+            match_id=first_match.id,
+            status_val="REJECTED",
+            organization_id=org_id
+        )
+        assert ok_rej is True
+        await db_session.refresh(opp)
+        assert opp.selected_solution_id is None
+
+        # 4. Invalid match status rejected
+        with pytest.raises(HTTPException) as exc_info:
+            await OpportunityService.update_capability_match(
+                db=db_session,
+                opportunity_id=opp.id,
+                match_id=first_match.id,
+                status_val="INVALID_STATUS",
+                organization_id=org_id
+            )
+        assert exc_info.value.status_code == 400
+
+    finally:
+        await db_session.execute(delete(Opportunity).where(Opportunity.id == opp.id))
+        await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_solution_candidates_service(db_session, test_prefix):
+    """
+    Validates get_solution_candidates returns INTERNAL, NETWORK, and HYBRID paths.
+    """
+    org_id = f"org-sol-{test_prefix}"
+    opp = Opportunity(
+        id=f"opp-sol-{test_prefix}",
+        organization_id=org_id,
+        company_name="Solutions Corp",
+        title="Enterprise AI Deployment",
+        problem="AI governance and regulatory compliance automation",
+        requirement="Real-time compliance monitoring",
+        status=OpportunityLifecycleStatus.QUALIFIED,
+        confidence=90
+    )
+    db_session.add(opp)
+    await db_session.commit()
+
+    try:
+        solutions = await OpportunityService.get_solution_candidates(
+            db=db_session,
+            opportunity_id=opp.id,
+            organization_id=org_id
+        )
+        assert len(solutions) == 3
+        types = {s.type for s in solutions}
+        assert types == {"INTERNAL", "NETWORK", "HYBRID"}
+
+    finally:
+        await db_session.execute(delete(Opportunity).where(Opportunity.id == opp.id))
+        await db_session.commit()
+

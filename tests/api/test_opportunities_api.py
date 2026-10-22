@@ -480,3 +480,134 @@ async def test_frontend_compatibility_endpoints(client, db_session, auth_headers
     finally:
         await db_session.execute(delete(Opportunity).where(Opportunity.id == opp.id))
         await db_session.commit()
+
+
+# ==============================================================================
+# 8. Capability Matching & Delivery Path Persistence Tests
+# ==============================================================================
+
+@pytest.mark.asyncio
+async def test_opportunity_capability_matches_and_delivery_path_lifecycle(client, db_session, auth_headers, test_prefix):
+    """
+    Verifies the end-to-end capability-delivery workflow:
+    1. GET /api/opportunities/{id}/capability-matches returns real, ranked offerings.
+    2. PATCH /api/opportunities/{id}/capability-matches/{match_id} persists selected capability in DB.
+    3. Rejection of invalid match status with 400.
+    4. GET /api/opportunities/{id}/solutions returns INTERNAL, NETWORK, and HYBRID candidates.
+    5. PATCH /api/opportunities/{id}/path enforces supported values (INTERNAL, NETWORK, HYBRID)
+       and persists delivery_path in PostgreSQL.
+    6. Rejection of invalid delivery path with 400.
+    7. GET /api/opportunities/{id} returns persisted deliveryPath and selectedSolutionId.
+    8. Cross-tenant or missing records return 404.
+    """
+    opp = Opportunity(
+        id=f"opp-cap-{test_prefix}",
+        organization_id="org-1",
+        company_name="CloudScale Enterprises",
+        title="Cloud Modernization & Pipeline Automation",
+        problem="Legacy monolithic database bottlenecks and delayed automated reporting pipelines.",
+        requirement="Microservices refactoring and automated ETL telemetry with SOC2 audit trails.",
+        opportunity_type="ENTERPRISE_AI_PILOT",
+        status=OpportunityLifecycleStatus.DISCOVERED,
+        confidence=80,
+        supporting_evidence_ids=["ev-test-cloud-1"]
+    )
+    db_session.add(opp)
+    await db_session.commit()
+
+    try:
+        # 1. GET /api/opportunities/{id}/capability-matches
+        matches_resp = await client.get(f"/api/opportunities/{opp.id}/capability-matches", headers=auth_headers)
+        assert matches_resp.status_code == 200
+        matches_data = matches_resp.json()
+        assert "matches" in matches_data
+        assert len(matches_data["matches"]) > 0
+
+        first_match = matches_data["matches"][0]
+        assert "id" in first_match
+        assert "capability" in first_match
+        assert first_match["capability"]["name"]
+        assert "reasoning" in first_match
+        assert first_match["reasoning"]["overallExplanation"]
+        assert first_match["status"] in ["CANDIDATE", "SELECTED"]
+
+        target_match_id = first_match["id"]
+        target_cap_id = first_match["capabilityId"]
+
+        # 2. PATCH /api/opportunities/{id}/capability-matches/{match_id} (Select Match)
+        select_resp = await client.patch(
+            f"/api/opportunities/{opp.id}/capability-matches/{target_match_id}",
+            json={"status": "SELECTED"},
+            headers=auth_headers
+        )
+        assert select_resp.status_code == 200
+        assert select_resp.json()["success"] is True
+
+        # Verify DB persistence of selected capability
+        db_opp = (await db_session.execute(select(Opportunity).where(Opportunity.id == opp.id))).scalars().first()
+        await db_session.refresh(db_opp)
+        assert db_opp.selected_solution_id == target_cap_id
+        assert db_opp.delivery_path == "INTERNAL"
+
+        # 3. PATCH with invalid match status returns 400
+        bad_status_resp = await client.patch(
+            f"/api/opportunities/{opp.id}/capability-matches/{target_match_id}",
+            json={"status": "INVALID_STATE"},
+            headers=auth_headers
+        )
+        assert bad_status_resp.status_code == 400
+
+        # 4. GET /api/opportunities/{id}/solutions
+        solutions_resp = await client.get(f"/api/opportunities/{opp.id}/solutions", headers=auth_headers)
+        assert solutions_resp.status_code == 200
+        sols_data = solutions_resp.json()
+        assert "solutions" in sols_data
+        sol_types = {s["type"] for s in sols_data["solutions"]}
+        assert "INTERNAL" in sol_types
+        assert "NETWORK" in sol_types
+        assert "HYBRID" in sol_types
+
+        # 5. PATCH /api/opportunities/{id}/path with valid supported paths
+        for valid_path in ["NETWORK", "HYBRID", "INTERNAL"]:
+            path_resp = await client.patch(
+                f"/api/opportunities/{opp.id}/path",
+                json={"path": valid_path},
+                headers=auth_headers
+            )
+            assert path_resp.status_code == 200
+            p_data = path_resp.json()
+            assert p_data["success"] is True
+            assert p_data["selected_path"] == valid_path
+            assert p_data["delivery_path"] == valid_path
+
+            # Verify PostgreSQL persistence
+            await db_session.refresh(db_opp)
+            assert db_opp.delivery_path == valid_path
+            assert db_opp.selected_path == valid_path
+
+        # 6. PATCH /api/opportunities/{id}/path with invalid path returns 400
+        invalid_path_resp = await client.patch(
+            f"/api/opportunities/{opp.id}/path",
+            json={"path": "OUTSOURCED"},
+            headers=auth_headers
+        )
+        assert invalid_path_resp.status_code == 400
+        assert "Supported values" in invalid_path_resp.json()["detail"]
+
+        # 7. GET /api/opportunities/{id} returns deliveryPath & selectedSolutionId
+        get_detail_resp = await client.get(f"/api/opportunities/{opp.id}", headers=auth_headers)
+        assert get_detail_resp.status_code == 200
+        detail_data = get_detail_resp.json()
+        assert detail_data["deliveryPath"] == "INTERNAL"
+        assert detail_data["selectedSolutionId"] == target_cap_id
+
+        # 8. Non-existent opportunity returns 404
+        missing_id = "opp-non-existent-cap-999"
+        assert (await client.get(f"/api/opportunities/{missing_id}/capability-matches", headers=auth_headers)).status_code == 404
+        assert (await client.get(f"/api/opportunities/{missing_id}/solutions", headers=auth_headers)).status_code == 404
+        assert (await client.patch(f"/api/opportunities/{missing_id}/path", json={"path": "INTERNAL"}, headers=auth_headers)).status_code == 404
+
+    finally:
+        await db_session.execute(delete(Opportunity).where(Opportunity.id == opp.id))
+        await db_session.commit()
+

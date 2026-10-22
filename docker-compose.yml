@@ -20,6 +20,25 @@ services:
       redis:
         condition: service_healthy
 
+  job-scheduler:
+    build: .
+    command: ["python", "-m", "app.workers.job_scraper_worker"]
+    volumes:
+      - .:/app
+    environment:
+      - ENVIRONMENT=development
+      - POSTGRES_SERVER=db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=networkos
+      - REDIS_HOST=redis
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   db:
     image: postgres:15-alpine
     ports:

@@ -169,11 +169,16 @@ def _normalize_opportunity_input(data: Any) -> Any:
         "matchedProductName": get_val("matched_product_name", ["matched_product_name", "matchedProductName"]),
         "matchScore": get_val("match_score", ["match_score", "matchScore"]),
         "matchRationale": get_val("match_rationale", ["match_rationale", "matchRationale"]),
+        "deliveryPath": get_val("delivery_path", ["delivery_path", "deliveryPath", "selected_path", "selectedPath"]),
+        "selectedSolutionId": get_val("selected_solution_id", ["selected_solution_id", "selectedSolutionId"]),
         "supportingEvidenceIds": [str(x) for x in (raw_ev_ids if isinstance(raw_ev_ids, list) else [])],
         "reviewNotes": get_val("review_notes", ["review_notes", "reviewNotes"]),
         "reviewedBy": get_val("reviewed_by", ["reviewed_by", "reviewedBy"]),
         "reviewedAt": r_at_str,
-        "validUntil": v_until_str
+        "validUntil": v_until_str,
+        # Search fields passed through for OpportunitySearchResult
+        "relevanceScore": get_val("relevanceScore", ["relevanceScore", "relevance_score"], 100),
+        "matchReasons": get_val("matchReasons", ["matchReasons", "match_reasons"], []),
     }
 
 
@@ -227,6 +232,8 @@ class OpportunityOut(BaseModel):
     updatedAt: str
     # Full transparency of canonical backend state
     lifecycleStatus: Optional[OpportunityLifecycleStatus] = None
+    deliveryPath: Optional[str] = None
+    selectedSolutionId: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -268,6 +275,24 @@ class OpportunityDetailOut(OpportunityOut):
         return _normalize_opportunity_input(data)
 
 
+class OpportunitySearchResult(OpportunityOut):
+    """Schema for live opportunity search results with relevance scoring and match reasoning."""
+    relevanceScore: int = 100
+    matchReasons: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any) -> Any:
+        return _normalize_opportunity_input(data)
+
+
+class OpportunitySearchResponse(BaseModel):
+    """Schema for live opportunity search responses."""
+    query: str = ""
+    total: int = 0
+    results: List[OpportunitySearchResult] = Field(default_factory=list)
+
+
 # ==============================================================================
 # Opportunity Input Schemas
 # ==============================================================================
@@ -298,6 +323,10 @@ class OpportunityCreateIn(BaseModel):
     match_score: Optional[int] = Field(default=None, ge=0, le=100)
     match_rationale: Optional[str] = None
 
+    # Optional delivery path & capability selection
+    delivery_path: Optional[str] = Field(default=None, description="Delivery path ('INTERNAL', 'NETWORK', 'HYBRID')")
+    selected_solution_id: Optional[str] = Field(default=None, description="Selected solution or capability ID")
+
     # Provenance
     supporting_evidence_ids: Optional[List[str]] = Field(default_factory=list)
     trusted_context_ids: Optional[List[str]] = Field(default_factory=list)
@@ -321,3 +350,71 @@ class OpportunityValidationResponse(BaseModel):
     status: str
     message: Optional[str] = None
     opportunity: Optional[OpportunityDetailOut] = None
+
+
+# ==============================================================================
+# Delivery Path & Solution / Capability Matching Schemas
+# ==============================================================================
+
+SUPPORTED_DELIVERY_PATHS = {"INTERNAL", "NETWORK", "HYBRID"}
+
+class OpportunityPathIn(BaseModel):
+    path: str = Field(..., description="Selected delivery path ('INTERNAL', 'NETWORK', 'HYBRID')")
+
+
+class OpportunityPathResponse(BaseModel):
+    success: bool = True
+    opportunity_id: str
+    selected_path: str
+    delivery_path: str
+
+
+class CapabilityItem(BaseModel):
+    id: str
+    name: str
+    category: str = "PRODUCT"
+    description: str = ""
+    relevantExpertise: List[str] = Field(default_factory=list)
+    evidenceSource: str = "Ottobon Catalog"
+
+
+class MatchReasoning(BaseModel):
+    problemAlignment: str = "STRONG"
+    requirementAlignment: str = "STRONG"
+    technologyAlignment: str = "STRONG"
+    industryAlignment: str = "STRONG"
+    overallExplanation: str
+
+
+class CapabilityMatchOut(BaseModel):
+    id: str
+    opportunityId: str
+    capabilityId: str
+    capability: CapabilityItem
+    status: str = "CANDIDATE"  # CANDIDATE, SELECTED, REJECTED
+    reasoning: MatchReasoning
+    evidenceIds: List[str] = Field(default_factory=list)
+    confidence: int = 85
+
+
+class CapabilityMatchesResponse(BaseModel):
+    matches: List[CapabilityMatchOut]
+
+
+class CapabilityMatchUpdateIn(BaseModel):
+    status: str = Field(..., description="Target status ('CANDIDATE', 'SELECTED', 'REJECTED')")
+
+
+class SolutionCandidateOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    type: str  # INTERNAL, NETWORK, HYBRID
+    matchScore: int
+    trustLevel: str = "FACT"
+    evidenceId: Optional[str] = None
+
+
+class OpportunitySolutionsResponse(BaseModel):
+    solutions: List[SolutionCandidateOut]
+
