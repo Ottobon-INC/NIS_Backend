@@ -444,6 +444,17 @@ async def get_contact_360_data(
         or identity_confidence < 70
     )
 
+    identity_gate_reason = None
+    if is_identity_uncertain:
+        if identity_confidence < 70:
+            identity_gate_reason = f"Identity confidence is below threshold ({identity_confidence}% < 70%)"
+        elif snapshot.get("provenance_status") == "UNVERIFIED":
+            identity_gate_reason = "Identity provenance is unverified (no confirmed sources)"
+        elif snapshot.get("pipeline_stage") == "UNCERTAIN_IDENTITY":
+            identity_gate_reason = "Identity match is uncertain across research sources"
+        else:
+            identity_gate_reason = "Identity verification required"
+
     if opp_validation:
         effective_pipeline_stage = opp_validation.get("status", "PROPOSED")
     elif is_identity_uncertain:
@@ -461,6 +472,7 @@ async def get_contact_360_data(
         "canValidate": not is_identity_uncertain,
         "identityGatePassed": not is_identity_uncertain,
         "identityConfidence": identity_confidence,
+        "identityGateReason": identity_gate_reason,
         "businessProblem": (opp_validation.get("business_problem") if opp_validation
                             else snapshot.get("smallest_solvable_problem") or snapshot.get("broad_business_problem") or "Unspecified"),
         "capabilityMatch": (opp_validation.get("capability_match") if opp_validation
@@ -495,7 +507,7 @@ async def get_contact_360_data(
         "founder_reviewed": bool(contact.founder_reviewed),
         "card_status": contact.card_status,
         "contact_type": contact.contact_type,
-        "linkedinUrl": "",
+        "linkedinUrl": contact.profile_url or snapshot.get("profile_url", ""),
         "tier": snapshot.get("networkos_tier", "Tier 3"),
         "personIntelligence": {
             "background": snapshot.get("who_they_are", "No background found."),
@@ -605,9 +617,15 @@ async def validate_contact_opportunity(
 
     # Commercial Decision Safeguard: Uncertain identity strictly blocks qualification/validation
     if payload.status == OpportunityStatus.VALIDATED and is_identity_uncertain:
+        if identity_confidence < 70:
+            err_msg = f"Cannot validate opportunity: Target identity confidence is below threshold ({identity_confidence}% < 70%). Complete identity verification before commercial qualification."
+        elif snapshot.get("provenance_status") == "UNVERIFIED":
+            err_msg = f"Cannot validate opportunity: Target identity provenance is unverified (no confirmed sources). Complete identity verification before commercial qualification."
+        else:
+            err_msg = f"Cannot validate opportunity: Target identity is uncertain across research sources. Complete identity verification before commercial qualification."
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot validate opportunity: Target identity confidence is below threshold ({identity_confidence}% < 70%) or unverified. Complete identity verification before commercial qualification."
+            detail=err_msg
         )
 
     now_utc = datetime.now(timezone.utc)
@@ -627,6 +645,12 @@ async def validate_contact_opportunity(
         "can_validate": not is_identity_uncertain,
         "identity_gate_passed": not is_identity_uncertain,
         "identity_confidence": identity_confidence,
+        "identity_gate_reason": (
+            f"Identity confidence is below threshold ({identity_confidence}% < 70%)" if identity_confidence < 70
+            else "Identity provenance is unverified (no confirmed sources)" if snapshot.get("provenance_status") == "UNVERIFIED"
+            else "Identity match is uncertain across research sources" if is_identity_uncertain
+            else None
+        ),
         "business_problem": payload.confirmed_problem or snapshot.get("smallest_solvable_problem") or snapshot.get("broad_business_problem") or "Unspecified business problem",
         "capability_match": payload.confirmed_solution or snapshot.get("ottobon_capability_match") or "Unspecified capability",
         "supporting_evidence_ids": evidence_ids,
@@ -707,6 +731,7 @@ async def validate_contact_opportunity(
         can_validate=not is_identity_uncertain,
         identity_gate_passed=not is_identity_uncertain,
         identity_confidence=identity_confidence,
+        identity_gate_reason=validation_record["identity_gate_reason"],
         business_problem=validation_record["business_problem"],
         capability_match=validation_record["capability_match"],
         supporting_evidence_ids=validation_record["supporting_evidence_ids"],
