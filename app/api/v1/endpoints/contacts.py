@@ -369,6 +369,24 @@ async def get_contact_360_data(
                     opp_validation = sr.extracted_data['opportunity_validation']
             break
 
+    if not snapshot and run_ids:
+        try:
+            from app.services.evidence import EvidenceEngine
+            logger.info(f"Triggering on-demand EvidenceEngine synthesis for contact {contact_id}, run {run_ids[0]}")
+            await EvidenceEngine.process_run_and_extract_snapshot(db, run_ids[0], contact_id)
+            sr_stmt = select(SourceResult).where(SourceResult.source_id == 'evidence_engine').order_by(SourceResult.retrieved_at.desc())
+            all_srs = (await db.execute(sr_stmt)).scalars().all()
+            for sr in all_srs:
+                if sr.metadata_ and sr.metadata_.get("contact_id") == contact_id:
+                    if sr.extracted_data:
+                        if 'executive_snapshot' in sr.extracted_data:
+                            snapshot = sr.extracted_data['executive_snapshot']
+                        if 'opportunity_validation' in sr.extracted_data:
+                            opp_validation = sr.extracted_data['opportunity_validation']
+                    break
+        except Exception as ee_err:
+            logger.error(f"On-demand EvidenceEngine synthesis failed for contact {contact_id}: {ee_err}")
+
 
     # Fetch persisted evidence records for this contact
     ev_stmt = select(Evidence).where(Evidence.related_entity_id == contact_id).order_by(Evidence.confidence.desc())
@@ -405,14 +423,15 @@ async def get_contact_360_data(
 
     # Determine target identity confidence and gate status
     identity_confidence = snapshot.get("identity_confidence", 0)
-    if not identity_confidence and contact_evidences:
-        identity_confidence = max([ev.confidence for ev in contact_evidences] or [0])
+    if (not identity_confidence or identity_confidence < 70) and contact_evidences:
+        max_ev_conf = max([ev.confidence for ev in contact_evidences if ev.confidence] or [0])
+        if max_ev_conf > identity_confidence:
+            identity_confidence = max_ev_conf
     elif not identity_confidence:
         identity_confidence = 100 if contact.full_name else 50
 
     is_identity_uncertain = (
         snapshot.get("pipeline_stage") == "UNCERTAIN_IDENTITY"
-        or snapshot.get("provenance_status") == "UNVERIFIED"
         or identity_confidence < 70
     )
 

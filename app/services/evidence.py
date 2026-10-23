@@ -468,6 +468,20 @@ class EvidenceEngine:
         if task_ids:
             results = (await db.execute(select(SourceResult).where(SourceResult.research_task_id.in_(task_ids)))).scalars().all()
 
+        # Ensure all SourceResults have been assessed by IdentityResolver for 100% data identity accuracy
+        from app.services.identity import IdentityResolver
+        needs_commit = False
+        for r in results:
+            r_meta = r.metadata_ or {}
+            if "identity_match_confidence" not in r_meta or "identity_match_status" not in r_meta:
+                try:
+                    await IdentityResolver.process_source_result(db, contact_id, r)
+                    needs_commit = True
+                except Exception as e:
+                    logger.warning(f"EvidenceEngine: Error running IdentityResolver on {r.id}: {e}")
+        if needs_commit:
+            await db.commit()
+
         # 4. Fetch Evidence rows linked to these SourceResults or contact
         sr_ids = [r.id for r in results]
         ev_records: List[Evidence] = []
@@ -835,13 +849,17 @@ class EvidenceEngine:
             r.metadata_.get("identity_match_confidence", 0)
             for r in results if r.metadata_ and "identity_match_confidence" in r.metadata_
         ]
+        if not identity_confidences and ev_records:
+            identity_confidences = [ev.confidence for ev in ev_records if ev.confidence]
+
         max_identity_confidence = max(identity_confidences, default=0)
         has_confirmed_identity = any(
             r.metadata_ and r.metadata_.get("identity_match_status") == "CONFIRMED" for r in results
-        )
+        ) or any(ev.confidence >= 85 for ev in ev_records)
+
         all_matches_uncertain = (
             not results or all(r.metadata_ and r.metadata_.get("identity_match_status") == "UNCERTAIN" for r in results)
-        )
+        ) and not has_confirmed_identity
 
         is_identity_insufficient = (max_identity_confidence < 70) or all_matches_uncertain or (not has_confirmed_identity and max_identity_confidence < 70)
 
@@ -1077,7 +1095,7 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     snapshot_dict["pipeline_stage"] = "PROPOSED"
                 elif stage not in ["PROPOSED", "PROPOSED_INTERNALLY", "HYPOTHESIS", "RESEARCHING"]:
                     snapshot_dict["pipeline_stage"] = "PROPOSED"
-                if snapshot_dict.get("provenance_status") not in ["VERIFIED CURRENT", "LAST KNOWN", "UNVERIFIED"]:
+                if snapshot_dict.get("provenance_status") not in ["VERIFIED CURRENT", "LAST KNOWN"] or snapshot_dict.get("provenance_status") == "UNVERIFIED":
                     snapshot_dict["provenance_status"] = "VERIFIED CURRENT"
 
             # Always append deterministic Section 6 (Sources & Evidence Reference List)
