@@ -20,21 +20,13 @@ logger = logging.getLogger("networkos")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize Crawl4AI persistent browser pool once on server startup
-    try:
-        import asyncio
-        from app.services.web.crawler import CrawlerService
-        await asyncio.wait_for(CrawlerService.get_crawler(), timeout=3.0)
-    except Exception as e:
-        logger.warning(f"Crawl4AI lifespan startup warning: {e}")
     yield
     # Gracefully shut down on server stop
     try:
-        import asyncio
         from app.services.web.crawler import CrawlerService
-        await asyncio.wait_for(CrawlerService.shutdown(), timeout=3.0)
-    except Exception as e:
-        logger.warning(f"Crawl4AI lifespan shutdown warning: {e}")
+        await CrawlerService.shutdown()
+    except Exception:
+        pass
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

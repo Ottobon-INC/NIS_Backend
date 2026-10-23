@@ -73,14 +73,33 @@ class SearchDiscoveryAdapter(DiscoveryAdapter):
         if not name or name == "Target Contact":
             return []
 
+        clean_name = re.sub(r'\b[0-9a-f]{6,}\b', '', name).strip()
+        clean_name = re.sub(r'\s+', ' ', clean_name)
+
         queries = []
+        # Priority 1: Exact Name + LinkedIn (highest quality hit for professional cards)
+        queries.append(f'"{clean_name}" linkedin')
+
+        # Priority 2: Exact Name + Company (if company is known)
         if company:
-            queries.append(f'"{name}" "{company}"')
-        queries.append(f'"{name}" linkedin')
-        queries.append(f'"{name}" (executive OR founder OR engineer OR leader OR interview)')
+            queries.append(f'"{clean_name}" "{company}"')
+
+        # Priority 3: Unique profile slug (e.g. "dianadedkova" or "naveen-vallabhani")
+        if slug and re.match(r'^[a-zA-Z0-9\-]{3,40}$', slug) and slug.lower() not in ["in", "pub", "profile"]:
+            queries.append(f'"{slug}"')
+
+        # Priority 4: Exact Name + professional leadership signals
+        queries.append(f'"{clean_name}" (executive OR director OR officer OR founder OR leader OR engineer)')
+        queries.append(f'"{clean_name}"')
+
+        # Deduplicate while preserving order
+        unique_queries = []
+        for q in queries:
+            if q not in unique_queries:
+                unique_queries.append(q)
 
         tasks = []
-        for q in queries[:2]:  # Bound search queries per run
+        for q in unique_queries[:3]:  # Top 3 most precise queries
             tasks.append({
                 "target_url": q,
                 "query": q,
@@ -95,14 +114,14 @@ class GitHubDiscoveryAdapter(DiscoveryAdapter):
 
     def generate_tasks(self, source: ResearchSource, contact: Contact, identities: List[ExternalIdentity]) -> List[Dict[str, Any]]:
         name, slug, company = extract_profile_slug_and_name(contact, identities)
-        search_query = slug.replace("-", " ") if slug else name
+        search_query = slug if slug else name
         if not search_query or search_query == "Target Contact":
             return []
 
         return [{
             "target_url": search_query,
             "query": search_query,
-            "search_terms": [name, slug],
+            "search_terms": [name, slug] if slug else [name],
             "entity_identifiers": [name]
         }]
 
@@ -128,15 +147,21 @@ class CompanyWebDiscoveryAdapter(DiscoveryAdapter):
 
     def generate_tasks(self, source: ResearchSource, contact: Contact, identities: List[ExternalIdentity]) -> List[Dict[str, Any]]:
         name, slug, company = extract_profile_slug_and_name(contact, identities)
-        target = f"{name} {company}".strip() if company else name
-        if not target or target == "Target Contact":
+        if not name or name == "Target Contact":
             return []
+
+        if company:
+            target = f'"{name}" "{company}"'
+        elif slug and len(slug) >= 3:
+            target = f'"{slug}"'
+        else:
+            target = f'"{name}"'
 
         return [{
             "target_url": target,
             "query": target,
-            "search_terms": [name, company],
-            "entity_identifiers": [name, company]
+            "search_terms": [name, company] if company else [name],
+            "entity_identifiers": [name, company] if company else [name]
         }]
 
 class NewsPublicDiscoveryAdapter(DiscoveryAdapter):
@@ -148,9 +173,11 @@ class NewsPublicDiscoveryAdapter(DiscoveryAdapter):
         if not name or name == "Target Contact":
             return []
 
+        # Strictly quote name to prevent fuzzy celebrity matching (e.g. Princess Diana)
+        query = f'"{name}"'
         return [{
-            "target_url": name,
-            "query": name,
+            "target_url": query,
+            "query": query,
             "search_terms": [name],
             "entity_identifiers": [name]
         }]
@@ -164,8 +191,9 @@ class AgentReachDiscoveryAdapter(DiscoveryAdapter):
         if not name or name == "Target Contact":
             return []
 
+        query = f'"{name}"'
         return [{
-            "target_url": name,
+            "target_url": query,
             "agent_reach_target": "web",
             "search_terms": [name],
             "entity_identifiers": [name]

@@ -12,12 +12,13 @@ if "db.czgaluszcaedowkqbzne.supabase.co" in settings.POSTGRES_SERVER:
 
 engine = create_async_engine(
     db_uri,
-    echo=settings.ENVIRONMENT == "development",
+    echo=False,
     future=True,
     connect_args=connect_args,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=3,
+    pool_size=10,
+    max_overflow=10,
+    pool_timeout=10,
     pool_recycle=300
 )
 

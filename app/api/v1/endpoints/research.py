@@ -225,10 +225,18 @@ async def get_research_job_status(
             completed_at=t.completed_at
         ))
 
+    # Auto-resolve run status if all tasks are finished but run.status has not flipped
+    effective_status = run.status.value if hasattr(run.status, 'value') else str(run.status)
+    if pending == 0 and total > 0 and effective_status in ["RUNNING", "QUEUED", "PENDING"]:
+        effective_status = "COMPLETED" if failed == 0 else ("PARTIAL" if completed > 0 else "FAILED")
+        run.status = RunStatus(effective_status)
+        run.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
     return ResearchJobStatusOut(
         job_id=run.id,
         contact_id=run.contact_id,
-        status=run.status.value if hasattr(run.status, 'value') else str(run.status),
+        status=effective_status,
         total_tasks=total,
         completed_tasks=completed,
         failed_tasks=failed,

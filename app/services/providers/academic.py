@@ -202,7 +202,7 @@ class AcademicResearchProvider(ResearchProvider):
 
                 return {
                     "status": "SUCCESS",
-                    "final_url": top_author.get("orcid") or top_author.get("id") or f"https://openalex.org/authors?search={clean_name}",
+                    "final_url": ((top_author.get("orcid") or top_author.get("id")) if top_author else None) or f"https://openalex.org/authors?search={clean_name}",
                     "http_status": 200,
                     "title": f"Academic Research: {clean_name}",
                     "text_content": full_text,

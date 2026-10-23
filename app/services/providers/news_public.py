@@ -3,7 +3,10 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 from app.services.providers.base import ResearchProvider
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
 from app.core.config import settings
 
 logger = logging.getLogger("networkos")

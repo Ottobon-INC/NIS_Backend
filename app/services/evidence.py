@@ -3,6 +3,7 @@ import json
 import logging
 import uuid
 import re
+import hashlib
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple, Set
 
@@ -11,11 +12,30 @@ from sqlalchemy.future import select
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from fastapi.encoders import jsonable_encoder
 
 from app.core.config import settings
 from app.models.evidence import SourceResult, Evidence, EvidenceType
 from app.models.identity import Contact, ContactStatus
 from app.models.orchestration import ResearchTask
+from app.schemas.epistemic_evidence import (
+    AtomicClaim,
+    EvidenceRef,
+    CommercialHypothesis,
+    SourceAuthorityTier,
+    IdentityMatchStatus,
+)
+from app.services.research.entity_resolver import (
+    EntityResolver,
+    TargetExecutiveAnchor,
+    EntityResolutionResult,
+)
+from app.services.research.research_verifier import (
+    ResearchVerifier,
+    StoredSourceRecord,
+    VerifiedResearchDossier,
+    VerificationIssue,
+)
 
 logger = logging.getLogger("networkos")
 
@@ -55,7 +75,6 @@ class ExecutiveSnapshot(BaseModel):
     pipeline_stage: str = Field(default="PROPOSED", description="Stage: HYPOTHESIS, PROPOSED, VALIDATED, REJECTED, ON_HOLD, UNCERTAIN_IDENTITY")
     next_action_step: str = Field(description="Specific evidence-based research, approval, or outreach step")
 
-
     # Compatibility fields for existing UI components
     previous_roles: str = Field(default="", description="Summary of past roles")
     networkos_tier: str = Field(default="Tier 2", description="Tier 1 (Enterprise Decision Maker), Tier 2 (Domain Leader/Director), Tier 3 (Practitioner/Manager)")
@@ -66,8 +85,14 @@ class ExecutiveSnapshot(BaseModel):
     primary_conversation_door: str = Field(default="", description="An icebreaker or conversation starter")
     opportunity_hypotheses: str = Field(default="", description="Summary of hypotheses on potential opportunities")
 
-    # Rich Markdown Report answering the 5 questions
-    full_markdown_report: str = Field(description="A deeply analytical, narrative-style Commercial Opportunity Intelligence Report written in GitHub-flavored Markdown answering the 5 core questions.")
+    # Rich Markdown Report answering the core questions
+    full_markdown_report: str = Field(description="A deeply analytical, narrative-style Commercial Opportunity Intelligence Report written in GitHub-flavored Markdown.")
+
+    # Epistemic additive fields
+    verified_facts: List[Dict[str, Any]] = Field(default_factory=list, description="List of deterministically audited factual background claims")
+    commercial_hypotheses: List[Dict[str, Any]] = Field(default_factory=list, description="List of explicitly segregated sales hypotheses")
+    audit_issues: List[Dict[str, Any]] = Field(default_factory=list, description="Audit warnings and verification rejections")
+    identity_resolution_status: str = Field(default="PROBABLE", description="CONFIRMED, PROBABLE, AMBIGUOUS, or UNMATCHED")
 
 
 # ============================================================================
@@ -85,7 +110,6 @@ def detect_conflicts(
     """
     conflicts: List[str] = []
 
-    # Collect employer mentions per source
     employer_mentions: Dict[str, Set[str]] = {}
     role_mentions: Dict[str, Set[str]] = {}
 
@@ -98,22 +122,18 @@ def detect_conflicts(
         key = item.get("key", "")
         combined = f"{claim} | {excerpt}"
 
-        # Look for company/affiliation signals with finditer across combined claim and excerpt
         for comp_match in re.finditer(r'(?:Company|Affiliation|Corporate Page|Employer|Organization):\s*([^|\n]+)', combined, re.IGNORECASE):
             comp_name = comp_match.group(1).strip()
             if comp_name and comp_name.lower() not in generic_stopwords:
                 employer_mentions.setdefault(comp_name, set()).add(f"{key} ({src})")
 
-        # Look for role/title signals
         for role_match in re.finditer(r'(?:Bio|Summary|Scholar|Role|Title):\s*([^|\n]+)', combined, re.IGNORECASE):
             role_text = role_match.group(1).strip()
             if len(role_text) > 3 and role_text.lower() not in generic_stopwords:
                 role_mentions.setdefault(role_text, set()).add(f"{key} ({src})")
 
-    # If multiple distinct employers are identified across sources
     unique_employers = list(employer_mentions.keys())
     if len(unique_employers) > 1:
-        # Check all pairs
         for i in range(len(unique_employers)):
             for j in range(i + 1, len(unique_employers)):
                 emp1 = unique_employers[i]
@@ -180,7 +200,6 @@ def build_structured_evidence_context(
         else:
             uncertain_lines.append(block)
 
-    # Assemble full context document
     sections: List[str] = []
 
     target_info = (
@@ -227,6 +246,74 @@ def build_structured_evidence_context(
     return context_text, evidence_map
 
 
+def normalize_identity_status(st: Any) -> IdentityMatchStatus:
+    if not st:
+        return "AMBIGUOUS"
+    s = str(st).upper()
+    if s in ["CONFIRMED", "MATCH_CONFIRMED"]:
+        return "MATCH_CONFIRMED"
+    elif s == "PROBABLE":
+        return "PROBABLE"
+    elif s in ["AMBIGUOUS", "UNCERTAIN"]:
+        return "AMBIGUOUS"
+    return "UNMATCHED"
+
+
+STOP_WORDS = {
+    "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "at",
+    "by", "for", "with", "about", "against", "between", "into", "through",
+    "during", "before", "after", "above", "below", "to", "from", "up", "down",
+    "in", "out", "on", "off", "over", "under", "again", "further", "then",
+    "once", "here", "there", "all", "any", "both", "each", "few", "more",
+    "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+    "so", "than", "too", "very", "s", "t", "can", "will", "just", "don",
+    "should", "now", "is", "was", "are", "were", "be", "been", "being",
+    "have", "has", "had", "having", "do", "does", "did", "doing"
+}
+
+
+def find_supporting_quote_in_source(claim_text: str, source_text: str) -> Optional[str]:
+    """
+    Finds a verbatim quote within source_text that genuinely supports claim_text.
+    1. If claim_text directly appears in source_text, returns that substring.
+    2. Otherwise splits source_text into sentences/lines. If a sentence shares significant
+       factual tokens of claim_text, returns that sentence as the verbatim quote.
+    3. If no sentence in source_text contains the core claim tokens, returns None.
+    """
+    if not claim_text or not source_text:
+        return None
+
+    clean_claim = claim_text.strip()
+    idx = source_text.lower().find(clean_claim.lower())
+    if idx != -1:
+        return source_text[idx:idx + len(clean_claim)]
+
+    claim_tokens = [w.lower() for w in re.findall(r'\b[a-zA-Z0-9_\-]{3,}\b', clean_claim) if w.lower() not in STOP_WORDS]
+    if not claim_tokens:
+        return None
+
+    sentences = re.split(r'(?<=[.!?\n])\s+', source_text)
+    best_sentence = None
+    best_ratio = 0.0
+    min_matches = 1 if len(claim_tokens) <= 2 else 2
+
+    for sent in sentences:
+        sent_clean = sent.strip()
+        if not sent_clean:
+            continue
+        sent_tokens = set(w.lower() for w in re.findall(r'\b[a-zA-Z0-9_\-]{3,}\b', sent_clean) if w.lower() not in STOP_WORDS)
+        if not sent_tokens:
+            continue
+
+        matches = [t for t in claim_tokens if t in sent_tokens]
+        match_ratio = len(matches) / len(claim_tokens)
+        if match_ratio >= 0.5 and len(matches) >= min_matches and match_ratio > best_ratio:
+            best_ratio = match_ratio
+            best_sentence = sent_clean
+
+    return best_sentence
+
+
 def validate_report_citations(
     markdown_text: str,
     evidence_map: Dict[str, Dict[str, Any]]
@@ -235,16 +322,13 @@ def validate_report_citations(
     Validates all citation keys cited in the generated report.
     - Ensures every cited [E#] key exists in evidence_map.
     - Detects unknown/fabricated keys (e.g., [E999]).
-    - Detects malformed citation keys (e.g., [E], [Eabc], [EV1]).
+    - Detects malformed citation keys.
     - Detects citations from UNCERTAIN identity sources used in verified factual context.
-    - Documents verification boundaries.
     """
-    # Regex to find citation keys: [E1], [E2], etc.
-    found_keys = re.findall(r'\[(E\d+)\]', markdown_text)
+    md_str = str(markdown_text or "")
+    found_keys = re.findall(r'\[(E\d+)\]', md_str)
     unique_found = sorted(set(found_keys), key=lambda x: int(x[1:]) if x[1:].isdigit() else x)
-
-    # Check for malformed citations: [E], [Eabc], [EV1], etc.
-    malformed_matches = re.findall(r'\[(E[a-zA-Z]+|\bEV\d+|\bE\b)\]', markdown_text)
+    malformed_matches = re.findall(r'\[(E[a-zA-Z]+|\bEV\d+|\bE\b)\]', md_str)
 
     valid_citations: List[str] = []
     unknown_citations: List[str] = []
@@ -272,9 +356,8 @@ def validate_report_citations(
     for m in malformed_matches:
         warnings.append(f"Malformed citation format detected: [{m}]. Citation keys must follow the deterministic format [E1], [E2], etc.")
 
-    # Check Section 1 factual lines for missing citations
     unsupported_claims: List[str] = []
-    sec1_match = re.search(r'## 1\. Executive & Domain Intelligence(.*?)(?:## 2\.|\Z)', markdown_text, re.DOTALL)
+    sec1_match = re.search(r'## 1\. Executive & Domain Intelligence(.*?)(?:## 2\.|\Z)', md_str, re.DOTALL)
     if sec1_match:
         sec1_text = sec1_match.group(1)
         for line in sec1_text.splitlines():
@@ -329,7 +412,6 @@ def build_persisted_evidence_reference_table(
         "|---|---|---|---|---|---|---|"
     ]
 
-    # Sort keys numerically: E1, E2, ...
     sorted_keys = sorted(evidence_map.keys(), key=lambda x: int(x[1:]) if x[1:].isdigit() else x)
     for k in sorted_keys:
         item = evidence_map[k]
@@ -355,8 +437,24 @@ def build_persisted_evidence_reference_table(
 
 class EvidenceEngine:
     @staticmethod
-    async def process_run_and_extract_snapshot(db: AsyncSession, run_id: str, contact_id: str):
-        logger.info(f"EvidenceEngine: Starting structured extraction for run {run_id}")
+    async def process_run_and_extract_snapshot(
+        db: AsyncSession,
+        run_id: str,
+        contact_id: str,
+        enable_epistemic_verification: Optional[bool] = None
+    ):
+        """
+        Processes a research run, performs identity disambiguation, audits all claims
+        via deterministic research verifier, segregates commercial hypotheses from factual claims,
+        and saves the grounded snapshot to the database.
+        """
+        use_epistemic = (
+            settings.ENABLE_EPISTEMIC_VERIFICATION
+            if enable_epistemic_verification is None
+            else enable_epistemic_verification
+        )
+
+        logger.info(f"EvidenceEngine: Starting structured extraction for run {run_id} (EpistemicVerification={use_epistemic})")
 
         # 1. Fetch Contact
         contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalars().first()
@@ -377,7 +475,6 @@ class EvidenceEngine:
             ev_records = (await db.execute(select(Evidence).where(Evidence.source_result_id.in_(sr_ids)))).scalars().all()
 
         if not ev_records and contact_id:
-            # Fallback to any evidence associated with contact
             ev_records = (await db.execute(select(Evidence).where(Evidence.related_entity_id == contact_id))).scalars().all()
 
         # ====================================================================
@@ -417,7 +514,10 @@ class EvidenceEngine:
                     f"> ⛔ **COMMERCIAL SCENARIO SUPPRESSED — UNVERIFIED IDENTITY**\n"
                     f"> Source identity confidence is 0%. Commercial pricing, effort, and outreach recommendations are withheld.\n"
                 ),
-                "sources_used": []
+                "sources_used": [],
+                "verified_facts": [],
+                "commercial_hypotheses": [],
+                "audit_issues": []
             }
 
             engine_result = SourceResult(
@@ -442,15 +542,173 @@ class EvidenceEngine:
             return
 
         # ====================================================================
-        # BUILD STRUCTURED EVIDENCE ITEMS WITH PERSISTED METADATA
+        # EXECUTIVE IDENTITY DISAMBIGUATION (EntityResolver)
+        # ====================================================================
+        executive_anchor = TargetExecutiveAnchor(
+            full_name=contact.full_name or "Unknown",
+            current_company=contact.current_company,
+            current_title=contact.current_title,
+            location=contact.location,
+            profile_url=contact.profile_url,
+            company_domain=contact.company_website
+        )
+
+        sources_registry: Dict[str, StoredSourceRecord] = {}
+
+        for r in results:
+            cand_url = r.raw_reference or (r.extracted_data.get("url") if r.extracted_data else None) or ""
+            cand_title = (r.extracted_data.get("title") if r.extracted_data else None) or r.query or ""
+            cand_text = (
+                (r.extracted_data.get("text") or r.extracted_data.get("text_content") or r.raw_reference or "")
+                if r.extracted_data else (r.raw_reference or "")
+            )
+
+            # Check individual search hits for exact LinkedIn profile match
+            if r.extracted_data and isinstance(r.extracted_data, dict) and "results" in r.extracted_data:
+                hits = r.extracted_data.get("results") or []
+                target_slug = EntityResolver._extract_linkedin_slug(executive_anchor.profile_url)
+                for h in hits:
+                    h_url = h.get("href") or ""
+                    h_slug = EntityResolver._extract_linkedin_slug(h_url)
+                    if (target_slug and h_slug and target_slug == h_slug) or (
+                        "linkedin.com/in/" in h_url.lower() and executive_anchor.full_name.lower() in (h.get("title") or "").lower()
+                    ):
+                        cand_url = h_url
+                        cand_title = h.get("title") or cand_title
+                        cand_text = f"{h.get('title', '')}\n{h.get('body', '')}"
+                        break
+
+            cand_domain = EntityResolver._extract_domain(cand_url)
+            r_meta = dict(r.metadata_ or {})
+
+            if use_epistemic:
+                # Deterministic resolution
+                resolution: EntityResolutionResult = EntityResolver.resolve_executive(
+                    anchor=executive_anchor,
+                    candidate_url=cand_url,
+                    candidate_title=cand_title,
+                    candidate_text=cand_text
+                )
+
+                if resolution.status == "MATCH_CONFIRMED":
+                    match_st = "CONFIRMED"
+                    match_conf = 95
+                elif resolution.status == "PROBABLE":
+                    match_st = "PROBABLE"
+                    match_conf = 70
+                else:
+                    match_st = "UNCERTAIN"
+                    match_conf = 20
+
+                r_meta["identity_match_status"] = match_st
+                r_meta["identity_match_confidence"] = match_conf
+                r_meta["epistemic_resolution_status"] = resolution.status
+                r_meta["is_eligible_for_factual_claims"] = resolution.is_eligible_for_factual_claims
+                r_meta["matched_anchors"] = resolution.matched_anchors
+                r_meta["conflict_flags"] = resolution.conflict_flags
+                r.metadata_ = r_meta
+
+                # Auto-populate contact title & company from verified LinkedIn preview card if unpopulated
+                if contact and ("exact_linkedin_slug" in resolution.matched_anchors or "linkedin.com/in/" in cand_url.lower()):
+                    import html
+                    clean_t = html.unescape(cand_title)
+                    clean_txt = html.unescape(cand_text)
+                    clean_t = re.sub(r'\s*\|\s*LinkedIn.*|\s*-\s*LinkedIn.*', '', clean_t, flags=re.I).strip()
+                    t_parts = [p.strip() for p in re.split(r'\s+[–\-·|]\s+', clean_t) if p.strip()]
+                    extracted_role = None
+                    extracted_org = None
+
+                    # 1. Experience: <Org>
+                    exp_match = re.search(r'Experience:\s*([A-Za-z0-9\s&]{2,30})', clean_txt, flags=re.I)
+                    if exp_match:
+                        extracted_org = exp_match.group(1).split('|')[0].split('·')[0].strip()
+
+                    # 2. Organization match via "at / @"
+                    if not extracted_org:
+                        org_match = re.search(r'(?:at|@)\s+([A-Z][a-zA-Z0-9\s&]{2,30})', f"{clean_t} {clean_txt}")
+                        if org_match:
+                            extracted_org = org_match.group(1).strip()
+
+                    # 3. Analyze title parts (e.g. Name - Company - Role OR Name - Role - Company)
+                    if len(t_parts) >= 3:
+                        extracted_role = t_parts[1].strip()
+                        extracted_org = t_parts[2].strip()
+                    elif len(t_parts) == 2:
+                        role_blob = t_parts[1].strip()
+                        if "," in role_blob:
+                            r_sub, o_sub = role_blob.split(",", 1)
+                            extracted_role = r_sub.strip()
+                            if not extracted_org:
+                                extracted_org = o_sub.split("|")[0].split("·")[0].strip()
+                        else:
+                            extracted_role = role_blob
+
+                    # Role vs Organization Semantic Disambiguation:
+                    role_indicators = [
+                        "executive", "manager", "director", "officer", "lead", "head", "chief", "vp", "president",
+                        "engineer", "architect", "developer", "consultant", "analyst", "founder", "partner",
+                        "specialist", "administrator", "scientist", "representative", "account", "sales",
+                        "marketing", "business development", "delivery"
+                    ]
+                    org_indicators = [
+                        "services", "technologies", "systems", "solutions", "corporation", "corp", "inc", "llc",
+                        "ltd", "limited", "aws", "amazon", "google", "microsoft", "netrasemi", "ottobon", "cisco",
+                        "oracle", "ibm", "intel", "nvidia", "meta", "apple", "labs", "holdings"
+                    ]
+                    is_role_org = bool(extracted_role and any(re.search(r'\b' + re.escape(oi) + r'\b', extracted_role.lower()) for oi in org_indicators))
+                    is_org_role = bool(extracted_org and any(re.search(r'\b' + re.escape(ri) + r'\b', extracted_org.lower()) for ri in role_indicators))
+                    if is_role_org or is_org_role:
+                        extracted_role, extracted_org = extracted_org, extracted_role
+
+                    generic_roles = {"analyzing profile...", "professional", "unknown", "n/a", "none"}
+                    generic_orgs = {"pending research", "unknown", "n/a", "none"}
+
+                    if extracted_role and (not contact.current_title or contact.current_title.lower() in generic_roles):
+                        contact.current_title = extracted_role
+                        executive_anchor.current_title = extracted_role
+                    if extracted_org and (not contact.current_company or contact.current_company.lower() in generic_orgs):
+                        contact.current_company = extracted_org
+                        executive_anchor.current_company = extracted_org
+            else:
+                resolution = EntityResolutionResult(
+                    status="MATCH_CONFIRMED" if r_meta.get("identity_match_status") == "CONFIRMED" else "PROBABLE",
+                    is_eligible_for_factual_claims=True,
+                    resolution_notes="Legacy mode without epistemic gating"
+                )
+
+            # Determine source authority tier
+            if "linkedin.com/in/" in cand_url.lower() or (executive_anchor.company_domain and executive_anchor.company_domain in cand_domain):
+                tier: SourceAuthorityTier = "PRIMARY_OFFICIAL"
+            elif any(plat in cand_domain for plat in ["scholar.google", "github.com", "sec.gov", "news", "reuters.com", "bloomberg.com"]):
+                tier = "REPUTABLE_AGGREGATOR"
+            else:
+                tier = "UNVERIFIED_WEB"
+
+            stored_rec = StoredSourceRecord(
+                source_id=r.id,
+                url=cand_url,
+                canonical_url=cand_url,
+                domain=cand_domain,
+                raw_text=cand_text,
+                content_sha256=hashlib.sha256(cand_text.encode("utf-8")).hexdigest(),
+                authority_tier=tier,
+                identity_resolution=resolution
+            )
+            sources_registry[r.id] = stored_rec
+            sources_registry[r.source_id] = stored_rec
+
+        # ====================================================================
+        # BUILD STRUCTURED EVIDENCE ITEMS & AUDIT CLAIMS (ResearchVerifier)
         # ====================================================================
         evidence_items: List[Dict[str, Any]] = []
         sr_map = {r.id: r for r in results}
 
-        # 1. Map from persisted Evidence rows
+        # 1. Map existing persisted Evidence rows
         for ev in ev_records:
             matching_sr = sr_map.get(ev.source_result_id)
             sr_meta = matching_sr.metadata_ if matching_sr and matching_sr.metadata_ else {}
+
+            excerpt_txt = (matching_sr.extracted_data.get("text") or matching_sr.extracted_data.get("text_content") or matching_sr.raw_reference or "")[:1500] if matching_sr and matching_sr.extracted_data else ""
 
             evidence_items.append({
                 "evidence_id": ev.id,
@@ -464,10 +722,11 @@ class EvidenceEngine:
                 "retrieved_date": ev.retrieved_date.strftime("%Y-%m-%d") if ev.retrieved_date else None,
                 "identity_match_status": sr_meta.get("identity_match_status", "UNCERTAIN"),
                 "identity_confidence": sr_meta.get("identity_match_confidence", 50),
-                "excerpt": (matching_sr.extracted_data.get("text") or matching_sr.extracted_data.get("text_content") or matching_sr.raw_reference or "")[:1500] if matching_sr and matching_sr.extracted_data else ""
+                "excerpt": excerpt_txt,
+                "is_persisted_evidence": True
             })
 
-        # 2. If some source results didn't generate atomic Evidence rows, include them deterministically
+        # 2. Add missing source results as atomic items
         for r in results:
             if not any(it["source_result_id"] == r.id for it in evidence_items):
                 r_meta = r.metadata_ or {}
@@ -503,8 +762,73 @@ class EvidenceEngine:
                     "retrieved_date": r.retrieved_at.strftime("%Y-%m-%d") if r.retrieved_at else None,
                     "identity_match_status": r_meta.get("identity_match_status", "UNCERTAIN"),
                     "identity_confidence": r_meta.get("identity_match_confidence", 50),
-                    "excerpt": txt[:1500]
+                    "excerpt": txt[:1500],
+                    "is_persisted_evidence": False
                 })
+
+        # Deterministic Verification Pass on Evidence items
+        verified_atomic_claims: List[AtomicClaim] = []
+        dossier_issues: List[VerificationIssue] = []
+
+        if use_epistemic:
+            for item in evidence_items:
+                ev_id = item["evidence_id"]
+                claim_text = item["claim"]
+                quote_excerpt = item.get("excerpt", "")
+                src_key = item.get("source_result_id") or item.get("source_id")
+                source_record = sources_registry.get(src_key)
+                raw_source_text = source_record.raw_text if source_record else (quote_excerpt or "")
+
+                # Determine supporting verbatim quote
+                if item.get("is_persisted_evidence", True):
+                    discovered_quote = find_supporting_quote_in_source(claim_text, raw_source_text)
+                    target_verbatim_quote = discovered_quote if discovered_quote else claim_text
+                else:
+                    target_verbatim_quote = raw_source_text[:100] if raw_source_text else claim_text
+
+                # Build atomic claim to verify quote provenance
+                test_claim = AtomicClaim(
+                    claim_id=ev_id,
+                    subject_entity_id=contact_id,
+                    subject_type="EXECUTIVE",
+                    predicate="EXECUTIVE_FACT",
+                    value=claim_text,
+                    evidence=[EvidenceRef(
+                        source_id=src_key,
+                        source_url=item.get("source_reference") or "unknown",
+                        source_domain=EntityResolver._extract_domain(item.get("source_reference")),
+                        verbatim_quote=target_verbatim_quote[:200],
+                        source_authority=sources_registry.get(src_key).authority_tier if src_key in sources_registry else "UNVERIFIED_WEB",
+                        identity_status=normalize_identity_status(item.get("identity_match_status"))
+                    )]
+                )
+
+                verified_claim, issues = ResearchVerifier.verify_single_claim(test_claim, sources_registry)
+                verified_atomic_claims.append(verified_claim)
+                dossier_issues.extend(issues)
+
+                # Update database Evidence row type and confidence
+                db_ev = next((ev for ev in ev_records if ev.id == ev_id), None)
+                if db_ev:
+                    if verified_claim.epistemic_status == "VERIFIED":
+                        db_ev.evidence_type = EvidenceType.FACT
+                        db_ev.confidence = 95
+                    elif verified_claim.epistemic_status == "PARTIALLY_SUPPORTED":
+                        db_ev.evidence_type = EvidenceType.SIGNAL
+                        db_ev.confidence = 70
+                    elif verified_claim.epistemic_status == "CONFLICTING":
+                        db_ev.evidence_type = EvidenceType.SIGNAL
+                        db_ev.confidence = 40
+                        if not db_ev.claim.startswith("[⚠️ CONFLICTING]"):
+                            db_ev.claim = f"[⚠️ CONFLICTING] {db_ev.claim}"[:255]
+                    else:
+                        db_ev.evidence_type = EvidenceType.INFERENCE
+                        db_ev.confidence = 0
+                        if not db_ev.claim.startswith("[❌ UNVERIFIED]"):
+                            db_ev.claim = f"[❌ UNVERIFIED] {db_ev.claim}"[:255]
+
+                    item["confidence"] = db_ev.confidence
+                    item["evidence_type"] = db_ev.evidence_type.value
 
         # Calculate Overall Identity Assessment
         identity_confidences = [
@@ -533,7 +857,7 @@ class EvidenceEngine:
         )
 
         # ====================================================================
-        # LLM SYNTHESIS WITH STRICT CITATION PROMPT
+        # LLM SYNTHESIS WITH STRICT CITATION & HYPOTHESIS PROMPT
         # ====================================================================
         snapshot_dict = None
         llm_error = None
@@ -549,16 +873,16 @@ Network Intelligence is not merely a biography-research system; it is a commerci
 
 CRITICAL CITATION AND PROVENANCE PRINCIPLES:
 1. CITATION ENFORCEMENT:
-   - EVERY externally verifiable factual claim in Section 1 and Section 2 MUST cite one or more valid citation keys provided in the evidence context (e.g. `[E1]`, `[E2]`).
+   - EVERY externally verifiable factual claim in Section 1 MUST cite one or more valid citation keys provided in the evidence context (e.g. `[E1]`, `[E2]`).
    - Use ONLY citation keys that exist in the provided evidence. DO NOT fabricate citation keys such as [E999].
    - If a factual claim is not supported by the evidence, do NOT cite a key. Instead, mark it explicitly as `[UNVERIFIED]`.
    - Never fabricate URLs, observation dates, quotations, or metrics.
-2. DISTINGUISH FACTS, HYPOTHESES, AND OPPORTUNITIES:
+2. DISTINGUISH FACTS FROM COMMERCIAL HYPOTHESES:
    - [VERIFIED CURRENT]: Facts directly supported by CONFIRMED identity sources. Example: `- **Current Role & Org**: CTO at TechCorp [E1] [VERIFIED CURRENT]`
    - [LAST KNOWN]: Historical facts or past roles supported by evidence. Example: `- **Past Role**: Lead Engineer at StartupX [E2] [LAST KNOWN]`
    - [UNVERIFIED]: Claims lacking direct factual proof or from uncertain sources.
-   - [AI HYPOTHESIS]: Strategic inferences and reasoned assumptions created by AI. Hypotheses MUST be explicitly labeled and MUST NOT use citations to disguise inferences as verified facts.
-   - Proposed opportunities awaiting validation: Commercial proposals must carry `STATUS: PROPOSED_OPPORTUNITY (Awaiting Founder Validation)`. Research never marks an opportunity as qualified without human validation.
+   - [AI HYPOTHESIS - SALES INFERENCE]: Strategic inferences and reasoned assumptions created by AI regarding potential problems and solutions. Hypotheses MUST be explicitly labeled and MUST NOT use citations to disguise sales inferences as verified facts.
+   - Commercial proposals must carry `STATUS: PROPOSED_OPPORTUNITY (Awaiting Founder Validation)`. Research never marks an opportunity as qualified without human validation.
 3. HANDLING UNCERTAIN SOURCES:
    - Sources in Section C (UNCERTAIN IDENTITY) are excluded from factual synthesis. DO NOT cite them as verified facts.
    - Sources in Section B (PROBABLE IDENTITY) must be explicitly noted with `[PROBABLE - UNVERIFIED AFFILIATION]`.
@@ -568,11 +892,8 @@ CRITICAL CITATION AND PROVENANCE PRINCIPLES:
    - Distinguish job titles from genuine domain expertise.
    - Separate broad corporate challenges from the tightly bounded, deliverable problem Ottobon can solve first.
 6. COMMERCIAL DECISION SAFEGUARDS:
-   - AI-generated opportunities are unverified hypotheses or proposals awaiting human review.
-   - The system NEVER qualifies or validates an opportunity automatically.
    - Pipeline stage MUST be 'PROPOSED' or 'HYPOTHESIS' (or 'UNCERTAIN_IDENTITY' if identity is unconfirmed). Never output 'QUALIFIED' or 'VALIDATED'.
-   - Do NOT invent an Ottobon capability, rate card, budget, buyer authority, or confirmed customer pain point. If a company capability registry or pricing catalog does not exist, explicitly document that gap rather than fabricating one.
-   - Any pricing, effort, or rate card numbers are unverified assumptions/hypotheses only. Explicitly label them as assumptions.
+   - Any pricing ($10k-$20k), effort, or rate card numbers are unverified internal assumptions. Explicitly label them as assumptions.
 
 You MUST populate the `full_markdown_report` field using this EXACT format:
 
@@ -586,7 +907,7 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
 - **Client & Market Knowledge**: [Evidence of direct domain buyer knowledge vs theoretical concept] `[E#]`
 - **Domain SME Verification**: [Practitioner/SME vs intermediary. Operates in proven domain?] `[E#]`
 - **NetworkOS Tier**: [Tier 1 (Enterprise Decision Maker) | Tier 2 (Domain Leader/Director) | Tier 3 (Practitioner/Manager)]
-- **Source Conflicts & History**: [Explicitly note any discrepancies between sources, e.g. conflicting current employers or unconfirmed recent transitions. If none, state: "None detected across sources."]
+- **Source Conflicts & History**: [Explicitly note any discrepancies between sources. If none, state: "None detected across sources."]
 
 ## 2. Opportunity Discovery & Classification
 *Answering: What specific commercial opportunity exists—directly or through their network?*
@@ -595,12 +916,12 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
 | [Expert-Led Product Venture / Small Service Engagement / Capability Partner / Referral / Strategic Intro] | [Brief scope] | [Direct with person / Intro to 3rd party] | [VERIFIED CURRENT / AI HYPOTHESIS] |
 
 - **Identified Business Context**: [Detailed breakdown citing evidence `[E#]`]
-- **AI Opportunity Hypotheses**: `[AI HYPOTHESIS]` [Reasoned inferences regarding potential venture or service angles]
+- **AI Opportunity Hypotheses**: `[AI HYPOTHESIS - SALES INFERENCE]` [Reasoned inferences regarding potential venture or service angles]
 
 ## 3. The Smallest Worthwhile Solvable Problem
 *Answering: What is the smallest worthwhile problem Ottobon could solve?*
 - **Broad Business Challenge**: [The macro operational problem]
-- **Bounded Ottobon Solution**: `[AI HYPOTHESIS]` [Tightly scoped, realistic initial problem Ottobon can solve]
+- **Bounded Ottobon Solution**: `[AI HYPOTHESIS - SALES INFERENCE]` [Tightly scoped, realistic initial problem Ottobon can solve]
 - **Why Now Signal**: [Recent news, job transition, or industry trigger event citing `[E#]`]
 
 ## 4. Feasibility, Capability Matching & Commercial Scenarios
@@ -641,7 +962,7 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     ("system", system_prompt),
                     ("user", user_prompt_text)
                 ])
-                chain = prompt | llm.with_structured_output(ExecutiveSnapshot)
+                chain = prompt | llm.with_structured_output(ExecutiveSnapshot, method="function_calling")
 
                 snapshot = await chain.ainvoke({})
                 snapshot_dict = snapshot.model_dump() if hasattr(snapshot, "model_dump") else snapshot.dict()
@@ -681,7 +1002,7 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                         f"- **Status**: `UNVERIFIED` (LLM synthesis unavailable)\n"
                         f"- **Candidate**: {contact.full_name if contact else 'Unknown'}\n\n"
                         f"> ⚠️ **AI SYNTHESIS NOTICE**\n"
-                        f"> LLM extraction encountered an authentication or connectivity error: `{e}`.\n"
+                        f"> LLM extraction encountered an error: `{e}`.\n"
                         f"> Research data was successfully retrieved from sources and persisted.\n\n"
                         f"## 4. Feasibility, Capability Matching\n"
                         f"> ⛔ **COMMERCIAL SCENARIO SUPPRESSED — UNVERIFIED IDENTITY**\n"
@@ -698,7 +1019,6 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
             )
             snapshot_dict["citation_validation"] = citation_audit
 
-            # If invalid or fabricated citations detected, append explicit warnings
             if citation_audit["unknown_citations"] or citation_audit["malformed_citations"] or citation_audit["uncertain_citations"]:
                 audit_md = "\n\n### ⚠️ Citation & Provenance Audit Warnings\n"
                 for w in citation_audit["warnings"]:
@@ -708,10 +1028,6 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
             # ================================================================
             # IDENTITY & COMMERCIAL SAFEGUARDS ENFORCEMENT
             # ================================================================
-            # If identity confidence < 70% or all sources uncertain:
-            # - provenance_status MUST be UNVERIFIED
-            # - pipeline_stage MUST be UNCERTAIN_IDENTITY
-            # - suppress unsupported commercial pricing and margin models
             if is_identity_insufficient:
                 logger.warning(
                     f"EvidenceEngine: Low identity confidence ({max_identity_confidence}% < 70%). "
@@ -720,7 +1036,6 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                 snapshot_dict["provenance_status"] = "UNVERIFIED"
                 snapshot_dict["pipeline_stage"] = "UNCERTAIN_IDENTITY"
 
-                # Suppress commercial calculations
                 suppression_msg = (
                     "SUPPRESSED: Source identity confidence is insufficient (<70% or unverified). "
                     "Commercial pricing and gross margin models are suppressed pending identity verification."
@@ -735,7 +1050,6 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     "REQUIRED: Identity verification is required before any outreach or commercial proposal."
                 )
 
-                # Inject suppression notice and excise speculative table in Section 4 of full_markdown_report
                 suppress_banner = (
                     "\n> ⛔ **COMMERCIAL SCENARIO SUPPRESSED — UNVERIFIED IDENTITY**\n"
                     f"> Overall identity confidence is insufficient ({max_identity_confidence}%). "
@@ -758,8 +1072,6 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                         )
                     snapshot_dict["full_markdown_report"] = report_content
             else:
-                # Retain valid status; ensure pipeline stage reflects proposal state
-                # An AI report must NEVER automatically validate or qualify an opportunity
                 stage = snapshot_dict.get("pipeline_stage", "")
                 if stage in ["QUALIFIED", "VALIDATED", "APPROVED_FOR_OUTREACH"]:
                     snapshot_dict["pipeline_stage"] = "PROPOSED"
@@ -769,10 +1081,22 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     snapshot_dict["provenance_status"] = "VERIFIED CURRENT"
 
             # Always append deterministic Section 6 (Sources & Evidence Reference List)
-            # from actual database evidence records, not model hallucinations
             cited_set = set(citation_audit.get("valid_citations", []))
             persisted_sources_md = build_persisted_evidence_reference_table(evidence_map, cited_set)
             snapshot_dict["full_markdown_report"] = snapshot_dict.get("full_markdown_report", "") + persisted_sources_md
+
+            # Extract explicit CommercialHypothesis object
+            hyp_item = CommercialHypothesis(
+                hypothesis_id=f"hyp-exec-{contact_id[:8]}",
+                target_entity_id=contact_id,
+                trigger_claim_ids=[k for k in evidence_map.keys()],
+                inferred_pain_point=snapshot_dict.get("broad_business_problem", "Unverified operational challenge"),
+                ottobon_capability_offering=snapshot_dict.get("ottobon_capability_match", "Development"),
+                delivery_risk_assessment=snapshot_dict.get("delivery_risk_level", "MEDIUM"),
+                estimated_effort_hours=snapshot_dict.get("estimated_effort_hours"),
+                pricing_scenario=snapshot_dict.get("cost_pricing_estimate"),
+                epistemic_status="HYPOTHESIS"
+            )
 
             # Unique sources list for backward compatibility
             unique_sources: List[Dict[str, Any]] = []
@@ -787,10 +1111,17 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                         "identity_match_status": r_meta.get("identity_match_status", "UNCERTAIN"),
                         "identity_match_confidence": r_meta.get("identity_match_confidence", 50)
                     })
+
             snapshot_dict["sources_used"] = unique_sources
             snapshot_dict["identity_confidence"] = max_identity_confidence
             snapshot_dict["detected_conflicts"] = detected_conflicts
             snapshot_dict["evidence_map"] = evidence_map
+            snapshot_dict["verified_facts"] = [c.model_dump(mode="json") if hasattr(c, "model_dump") else c.dict() for c in verified_atomic_claims if c.epistemic_status in ["VERIFIED", "PARTIALLY_SUPPORTED"]]
+            snapshot_dict["commercial_hypotheses"] = [hyp_item.model_dump(mode="json") if hasattr(hyp_item, "model_dump") else hyp_item.dict()]
+            snapshot_dict["audit_issues"] = [i.model_dump(mode="json") if hasattr(i, "model_dump") else i.dict() for i in dossier_issues]
+            snapshot_dict["identity_resolution_status"] = "CONFIRMED" if has_confirmed_identity else ("PROBABLE" if max_identity_confidence >= 70 else "AMBIGUOUS")
+
+            clean_snapshot_dict = jsonable_encoder(snapshot_dict)
 
             # Persist result as SourceResult with source_id='evidence_engine'
             engine_result = SourceResult(
@@ -799,37 +1130,69 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                 query="Executive Snapshot Generation",
                 raw_reference="AI Extraction with Citation Grounding" if not llm_error else "Diagnostic Fallback Extraction",
                 status="SUCCESS",
-                extracted_data={"executive_snapshot": snapshot_dict},
+                extracted_data={"executive_snapshot": clean_snapshot_dict},
                 metadata_={
                     "model": "gpt-4o" if not llm_error else "fallback-error",
                     "timestamp": str(datetime.now(timezone.utc)),
                     "contact_id": contact_id,
                     "max_identity_confidence": max_identity_confidence,
-                    "provenance_status": snapshot_dict.get("provenance_status"),
-                    "pipeline_stage": snapshot_dict.get("pipeline_stage"),
+                    "provenance_status": clean_snapshot_dict.get("provenance_status"),
+                    "pipeline_stage": clean_snapshot_dict.get("pipeline_stage"),
                     "citations_count": len(citation_audit.get("valid_citations", [])),
+                    "epistemic_verification_enabled": use_epistemic,
                     "error": str(llm_error) if llm_error else None
                 }
             )
             db.add(engine_result)
 
             # Update Contact: preserve status lifecycle (ContactStatus.READY)
-            # and only populate fields safely
             if contact:
                 contact.status = ContactStatus.READY
-                if (not contact.full_name or contact.full_name in ["Unknown", "New Contact", ""]) and snapshot_dict.get("name"):
-                    contact.full_name = snapshot_dict["name"]
-                if (not contact.current_title or contact.current_title in ["Unknown", "Analyzing profile...", "Professional", ""]) and snapshot_dict.get("current_role"):
-                    contact.current_title = snapshot_dict["current_role"]
-                if (not contact.current_company or contact.current_company.lower() in ["unknown", "pending research", "independent", "", "[unverified]"]) and snapshot_dict.get("current_organization"):
-                    cand_org = snapshot_dict["current_organization"].strip()
-                    if cand_org.lower() not in ["unknown", "pending research", "independent", "[unverified]", "unverified", "none", ""] and not is_identity_insufficient:
-                        contact.current_company = cand_org
-                if (not contact.location or contact.location in ["Unknown", ""]) and snapshot_dict.get("location"):
-                    contact.location = snapshot_dict["location"]
+                if (not contact.full_name or contact.full_name in ["Unknown", "New Contact", ""]) and clean_snapshot_dict.get("name"):
+                    contact.full_name = clean_snapshot_dict["name"]
+
+                invalid_roles = {
+                    "unknown", "analyzing profile...", "professional", "unspecified", "not specified",
+                    "tbd", "n/a", "na", "none", "null", ""
+                }
+                invalid_orgs = {
+                    "unknown", "pending research", "independent", "[unverified]", "unverified",
+                    "unspecified", "not specified", "not provided", "tbd", "none", "n/a", "na", "null", ""
+                }
+
+                if not is_identity_insufficient:
+                    cand_role = (clean_snapshot_dict.get("current_role") or "").strip()
+                    cand_org = (clean_snapshot_dict.get("current_organization") or "").strip()
+
+                    if cand_role and cand_role.lower() not in invalid_roles:
+                        # Update title if missing, generic, or erroneously identical to the company name
+                        if not contact.current_title or contact.current_title.lower() in invalid_roles or (contact.current_company and contact.current_title.lower() == contact.current_company.lower()):
+                            contact.current_title = cand_role
+
+                    if cand_org and cand_org.lower() not in invalid_orgs:
+                        # Update company if missing, generic, unverified, or was mistakenly set to a job title
+                        role_keywords = ["executive", "manager", "director", "officer", "lead", "head", "specialist", "sales"]
+                        is_current_co_role = any(re.search(r'\b' + rk + r'\b', (contact.current_company or "").lower()) for rk in role_keywords)
+                        if not contact.current_company or contact.current_company.lower() in invalid_orgs or is_current_co_role or (contact.current_title and contact.current_company.lower() == contact.current_title.lower()):
+                            contact.current_company = cand_org
+                    elif contact.current_company and contact.current_company.lower() in invalid_orgs:
+                        contact.current_company = None
+
+                cand_loc = (clean_snapshot_dict.get("location") or "").strip()
+                if cand_loc and cand_loc.lower() not in invalid_orgs:
+                    contact.location = cand_loc
+                elif contact.location and contact.location.lower() in invalid_orgs:
+                    contact.location = None
 
             await db.commit()
             logger.info("EvidenceEngine: Successfully generated, validated, and persisted grounded Executive Snapshot.")
 
         except Exception as e:
             logger.error(f"EvidenceEngine: Failed to generate executive snapshot: {e}", exc_info=True)
+            # Ensure contact does not stay stuck in RESEARCHING
+            try:
+                if contact:
+                    contact.status = ContactStatus.READY
+                    await db.commit()
+            except Exception:
+                pass

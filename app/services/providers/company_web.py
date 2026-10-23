@@ -3,7 +3,10 @@ import logging
 from typing import Dict, Any, Optional
 from app.services.providers.base import ResearchProvider
 from app.services.providers.web import GeneralWebProvider
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
 from app.core.config import settings
 
 logger = logging.getLogger("networkos")
@@ -31,7 +34,8 @@ class CompanyWebsiteProvider(ResearchProvider):
 
         try:
             # 1. Search for official corporate bio or team mention
-            search_term = f'"{clean_query}" (team OR leadership OR "about us" OR executive OR biography)'
+            base_term = clean_query.strip().strip('"').strip("'")
+            search_term = f'"{base_term}" (team OR leadership OR "about us" OR executive OR biography)'
             def sync_search():
                 return list(DDGS().text(search_term, max_results=3))
 

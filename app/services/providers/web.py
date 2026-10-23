@@ -27,6 +27,14 @@ class GeneralWebProvider(ResearchProvider):
         except SSRError as e:
             return {"status": "BLOCKED", "error": str(e)}
 
+        from app.services.providers.search import unwrap_search_redirect
+        safe_url = unwrap_search_redirect(safe_url)
+
+        # Guard: Do not scrape search engine redirect or search result pages as company websites
+        lower_url = safe_url.lower()
+        if any(engine in lower_url for engine in ["bing.com/ck", "bing.com/search", "google.com/url", "google.com/search", "duckduckgo.com/l", "duckduckgo.com/?q"]):
+            return {"status": "BLOCKED", "error": "Search engine redirect or query pages cannot be scraped as company websites"}
+
         timeout = getattr(settings, "WEB_REQUEST_TIMEOUT_SECONDS", 15)
         max_bytes = getattr(settings, "WEB_MAX_RESPONSE_BYTES", 5 * 1024 * 1024)
 
@@ -47,6 +55,10 @@ class GeneralWebProvider(ResearchProvider):
                     markdown_content = res.get("markdown", "")
                     title = res.get("title", "")
                     text_content = markdown_content if markdown_content else res.get("html", "")
+                    # Sanitize placeholder redirect text
+                    if "please click here if the page does not redirect automatically" in text_content.lower():
+                        return {"status": "INVALID_CONTENT", "error": "Page is a redirect placeholder"}
+
                     return {
                         "status": "SUCCESS",
                         "final_url": res.get("url", safe_url),
@@ -63,8 +75,12 @@ class GeneralWebProvider(ResearchProvider):
 
         # 2. Resilient fallback: Standard asynchronous HTTP client + BeautifulSoup
         try:
+            req_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9"
+            }
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                resp = await client.get(safe_url, headers={"User-Agent": "NetworkOS/1.0"})
+                resp = await client.get(safe_url, headers=req_headers)
                 resp.raise_for_status()
 
                 content_len = resp.headers.get("Content-Length")
@@ -79,13 +95,24 @@ class GeneralWebProvider(ResearchProvider):
                 for tag in soup(["script", "style", "nav", "footer", "header"]):
                     tag.decompose()
 
+                body_text = soup.get_text(separator=" ", strip=True)
+
+                # Sanitize placeholder redirect pages (e.g. Bing redirect interstitial)
+                lower_body = body_text.lower()
+                if "please click here if the page does not redirect automatically" in lower_body or lower_body.strip() == "redirecting...":
+                    redirect_anchor = soup.find("a", href=True)
+                    if redirect_anchor and redirect_anchor.get("href"):
+                        target_href = unwrap_search_redirect(redirect_anchor["href"])
+                        if target_href and target_href != safe_url and not any(e in target_href.lower() for e in ["bing.com", "google.com", "duckduckgo.com"]):
+                            return await self.fetch_public_webpage(target_href)
+                    return {"status": "INVALID_CONTENT", "error": "Page is a redirect placeholder without content"}
+
                 title = soup.title.string.strip() if soup.title and soup.title.string else ""
                 meta_desc = ""
                 meta_tag = soup.find("meta", attrs={"name": "description"})
                 if meta_tag:
                     meta_desc = meta_tag.get("content", "").strip()
 
-                body_text = soup.get_text(separator=" ", strip=True)
                 structured_parts = []
                 if title:
                     structured_parts.append(f"Title: {title}")

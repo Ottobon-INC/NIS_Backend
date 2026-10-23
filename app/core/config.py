@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "networkos"
     POSTGRES_PORT: int = 5432
     OPENAI_API_KEY: str = ""
+    SERPER_API_KEY: str = ""
+    ENABLE_EPISTEMIC_VERIFICATION: bool = True
 
     @computed_field
     @property

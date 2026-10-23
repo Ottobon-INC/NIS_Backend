@@ -20,6 +20,7 @@ from app.services.providers.agent_reach import AgentReachProvider
 
 from app.services.identity import IdentityResolver
 from app.services.evidence import EvidenceEngine
+from app.services.company_intelligence import CompanyIntelligenceService
 
 logger = logging.getLogger("networkos")
 
@@ -174,6 +175,21 @@ async def execute_research_run(run_id: str):
                     contact = c_res.scalars().first()
                     if contact:
                         contact.status = ContactStatus.READY
+                        invalid_orgs = {
+                            "unknown", "pending research", "independent", "[unverified]", "unverified",
+                            "unspecified", "not specified", "not provided", "tbd", "none", "n/a", "na", "null", ""
+                        }
+                        clean_co = (contact.current_company or "").strip()
+                        if clean_co and clean_co.lower() not in invalid_orgs:
+                            try:
+                                logger.info(f"ResearchWorker: Auto-triggering Company Intelligence for '{clean_co}' (Contact ID: {contact.id})")
+                                await CompanyIntelligenceService.extract_and_persist(
+                                    db=db,
+                                    company_name=clean_co,
+                                    contact_id=contact.id
+                                )
+                            except Exception as ci_err:
+                                logger.warning(f"ResearchWorker: Auto-extraction of Company Intelligence failed for '{clean_co}': {ci_err}")
             else:
                 run.status = RunStatus.FAILED
                 run.error_message = "All research source providers failed to retrieve information."

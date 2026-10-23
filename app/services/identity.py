@@ -60,7 +60,7 @@ def extract_name_from_linkedin_slug(url_or_slug: str) -> str:
         return "New Contact"
     m = re.search(r'in/([^/?#]+)', url_or_slug)
     slug = m.group(1) if m else url_or_slug.strip()
-    clean_parts = [p for p in slug.split('-') if not (p.isdigit() or (len(p) > 10 and any(c.isdigit() for c in p)))]
+    clean_parts = [p for p in slug.split('-') if not any(c.isdigit() for c in p) and p.strip()]
     if len(clean_parts) > 1:
         return " ".join(p.capitalize() for p in clean_parts)
     elif len(clean_parts) == 1:

@@ -16,7 +16,7 @@ from app.schemas.contacts import ContactCreateURL, ContactInDB, ContactUpdate, C
 from app.api.dependencies import get_current_user
 from app.services.orchestrator import ResearchOrchestrator
 from app.workers.research_worker import mock_research_background_task
-from app.models.evidence import SourceResult, Evidence
+from app.models.evidence import SourceResult, Evidence, EvidenceType
 from app.models.research import ResearchSource
 from app.schemas.research import (
     EvidenceDetailOut,
@@ -110,17 +110,12 @@ async def list_contacts(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    run_cids_stmt = select(ResearchRun.contact_id).where(ResearchRun.contact_id.isnot(None))
-
     stmt = select(Contact)
     if only_researched:
         stmt = stmt.where(
             or_(
-                Contact.id.in_(run_cids_stmt),
-                and_(
-                    Contact.contact_type.in_([ContactType.TARGET, "TARGET_PROSPECT"]),
-                    Contact.status.in_([ContactStatus.RESEARCHING, ContactStatus.READY])
-                )
+                Contact.status.in_([ContactStatus.RESEARCHING, ContactStatus.READY]),
+                Contact.contact_type.in_([ContactType.TARGET, "TARGET_PROSPECT"])
             )
         )
 
@@ -146,33 +141,10 @@ async def list_contacts(
     out = []
     has_updates = False
 
-    sr_stmt = select(SourceResult).where(SourceResult.source_id == 'evidence_engine').order_by(SourceResult.retrieved_at.desc())
-    all_srs = (await db.execute(sr_stmt)).scalars().all()
-    evidence_by_contact = {}
-    for sr in all_srs:
-        cid = sr.metadata_.get("contact_id") if sr.metadata_ else None
-        if cid and cid not in evidence_by_contact:
-            evidence_by_contact[cid] = sr.extracted_data.get("executive_snapshot", {}) if sr.extracted_data else {}
-
     for c in contacts:
         name = c.full_name
         title = c.current_title
         company = c.current_company
-
-        snap = evidence_by_contact.get(c.id, {})
-        if snap:
-            if (not name or name == "Unknown") and snap.get("name") and snap.get("name") != "Unknown":
-                name = snap.get("name")
-                c.full_name = name
-                has_updates = True
-            if (not title or title == "Analyzing profile..." or title == "Unknown") and snap.get("current_role") and snap.get("current_role") != "Unknown":
-                title = snap.get("current_role")
-                c.current_title = title
-                has_updates = True
-            if (not company or company == "Pending research" or company == "Unknown") and snap.get("current_organization") and snap.get("current_organization") != "Unknown":
-                company = snap.get("current_organization")
-                c.current_company = company
-                has_updates = True
 
         if not name or name == "Unknown":
             if c.profile_url:
@@ -498,10 +470,115 @@ async def get_contact_360_data(
         ]
     }
 
+    # -------------------------------------------------------------------------
+    # EPISTEMIC VERIFICATION DATA ASSEMBLY (Phase 4 Surface)
+    # -------------------------------------------------------------------------
+    raw_verified = snapshot.get("verified_facts") or []
+    verified_facts_list = []
+    signals_context_list = []
+
+    for vf in raw_verified:
+        ev_refs = vf.get("evidence", [])
+        primary_ev = ev_refs[0] if ev_refs else {}
+        status = vf.get("epistemic_status", "PARTIALLY_SUPPORTED")
+        item_payload = {
+            "claimId": vf.get("claim_id"),
+            "predicate": vf.get("predicate", "EXECUTIVE_FACT"),
+            "claim": vf.get("value"),
+            "status": status,
+            "authorityTier": primary_ev.get("source_authority", "PRIMARY_OFFICIAL" if status == "VERIFIED" else "UNVERIFIED_WEB"),
+            "sourceUrl": primary_ev.get("source_url") or primary_ev.get("source_domain", "Authoritative Source"),
+            "quote": primary_ev.get("verbatim_quote", ""),
+            "identityStatus": primary_ev.get("identity_status", "MATCH_CONFIRMED" if status == "VERIFIED" else "PROBABLE")
+        }
+        if status == "VERIFIED" and not is_identity_uncertain:
+            verified_facts_list.append(item_payload)
+        else:
+            signals_context_list.append(item_payload)
+
+    # Fallback from contact_evidences if snapshot didn't populate lists
+    # EPISTEMIC INTEGRITY RULE: Legacy database records that have not passed epistemic
+    # verification MUST NEVER be promoted to verified_facts_list. They are safely relegated
+    # to signals_context_list with LEGACY_UNAUDITED tier, or quarantined if unverified.
+    if not verified_facts_list and not signals_context_list:
+        for ev in contact_evidences:
+            if ev.confidence == 0 or ev.evidence_type in [EvidenceType.INFERENCE, EvidenceType.HYPOTHESIS, "INFERENCE", "HYPOTHESIS"] or "[❌" in (ev.claim or ""):
+                clean_text = (ev.claim or "").replace("[❌ UNVERIFIED] ", "")
+                if not any(item.get("reason", "").startswith(clean_text) for item in conflicts_quarantined_list):
+                    conflicts_quarantined_list.append({
+                        "claimId": ev.id,
+                        "issueType": "LEGACY_UNAUDITED_UNSUPPORTED",
+                        "reason": f"Legacy unverified record withheld from verified facts: '{clean_text}'",
+                        "severity": "FATAL",
+                        "status": "QUARANTINED"
+                    })
+                continue
+
+            # Safe handling: Relegate all other legacy evidence to signalsContext as PARTIALLY_SUPPORTED
+            signals_context_list.append({
+                "claimId": ev.id,
+                "predicate": "OBSERVED_SIGNAL",
+                "claim": (ev.claim or "").replace("[⚠️ CONFLICTING] ", ""),
+                "status": "PARTIALLY_SUPPORTED",
+                "authorityTier": "LEGACY_UNAUDITED",
+                "sourceUrl": ev.source_reference or ev.source_id,
+                "quote": ev.claim,
+                "observedDate": ev.observed_date.strftime("%Y-%m-%d") if ev.observed_date else None,
+                "identityStatus": "PROBABLE" if not is_identity_uncertain else "AMBIGUOUS"
+            })
+
+    # Commercial hypotheses
+    commercial_hypotheses_list = snapshot.get("commercial_hypotheses") or []
+    if not commercial_hypotheses_list and snapshot:
+        commercial_hypotheses_list = [{
+            "hypothesis_id": f"hyp-{contact_id[:8]}",
+            "trigger_claim_ids": list(evidence_map.keys()),
+            "inferred_pain_point": snapshot.get("broad_business_problem") or "Unverified business challenge",
+            "ottobon_capability_offering": snapshot.get("ottobon_capability_match") or "Development",
+            "delivery_risk_assessment": snapshot.get("delivery_risk_level", "MEDIUM"),
+            "estimated_effort_hours": snapshot.get("estimated_effort_hours", "Pending scoping"),
+            "pricing_scenario": snapshot.get("cost_pricing_estimate", "Indicative pricing assumption"),
+            "epistemic_status": "HYPOTHESIS"
+        }]
+
+    # Conflicts & quarantined claims
+    conflicts_quarantined_list = []
+    for issue in snapshot.get("audit_issues", []):
+        conflicts_quarantined_list.append({
+            "claimId": issue.get("claim_id"),
+            "issueType": issue.get("issue_type"),
+            "reason": issue.get("message"),
+            "severity": issue.get("severity", "WARNING"),
+            "status": "QUARANTINED"
+        })
+
+    for conflict_str in snapshot.get("detected_conflicts", []):
+        conflicts_quarantined_list.append({
+            "claimId": f"conflict-{uuid.uuid4().hex[:6]}",
+            "issueType": "CROSS_SOURCE_CONFLICT",
+            "reason": conflict_str,
+            "severity": "WARNING",
+            "status": "CONFLICTING"
+        })
+
+    for ev in contact_evidences:
+        if ev.confidence == 0 or ev.evidence_type in [EvidenceType.INFERENCE, EvidenceType.HYPOTHESIS] or "[❌ UNVERIFIED]" in (ev.claim or ""):
+            clean_text = (ev.claim or "").replace("[❌ UNVERIFIED] ", "")
+            if not any(item.get("reason", "").startswith(clean_text) for item in conflicts_quarantined_list):
+                conflicts_quarantined_list.append({
+                    "claimId": ev.id,
+                    "issueType": "UNSUPPORTED_OR_AMBIGUOUS",
+                    "reason": f"Withheld claim: '{clean_text}'. Unsupported by source text or associated with ambiguous identity.",
+                    "severity": "FATAL",
+                    "status": "QUARANTINED"
+                })
+
+    identity_res_status = snapshot.get("identity_resolution_status", "CONFIRMED" if not is_identity_uncertain else "AMBIGUOUS")
+
     return {
         "id": contact.id,
         "name": contact.full_name or snapshot.get("name", "Unknown"),
-        "title": contact.current_title or snapshot.get("current_role", "Unknown"),
+        "title": (contact.current_title if contact.current_title not in ["Analyzing profile...", "Unknown", ""] else None) or (snapshot.get("current_role") if snapshot.get("current_role") not in ["Analyzing profile...", "Unknown", ""] else None) or "Professional",
         "company": contact.current_company or snapshot.get("current_organization", "Unknown"),
         "location": contact.location or snapshot.get("location", "Unknown"),
         "founder_reviewed": bool(contact.founder_reviewed),
@@ -545,8 +622,27 @@ async def get_contact_360_data(
             "activeOpportunities": []
         },
         "full_markdown_report": snapshot.get("full_markdown_report", ""),
+        "epistemicVerification": {
+            "identityStatus": identity_res_status,
+            "identityConfidence": identity_confidence,
+            "verifiedFactsCount": len(verified_facts_list),
+            "signalsCount": len(signals_context_list),
+            "hypothesesCount": len(commercial_hypotheses_list),
+            "quarantinedCount": len(conflicts_quarantined_list)
+        },
         "commercialIntelligence": {
             "provenanceStatus": snapshot.get("provenance_status", "UNVERIFIED"),
+            "identityResolutionStatus": identity_res_status,
+            "verifiedFacts": verified_facts_list,
+            "verified_facts": verified_facts_list,
+            "signalsContext": signals_context_list,
+            "observed_signals": signals_context_list,
+            "commercialHypotheses": commercial_hypotheses_list,
+            "commercial_hypotheses": commercial_hypotheses_list,
+            "conflictsAndQuarantined": conflicts_quarantined_list,
+            "conflicts_and_quarantined": conflicts_quarantined_list,
+            "auditIssues": snapshot.get("audit_issues", []),
+            "audit_issues": snapshot.get("audit_issues", []),
             "domainName": snapshot.get("domain_name", ""),
             "provenDomainExpertise": snapshot.get("proven_domain_expertise", ""),
             "isDomainSme": snapshot.get("is_domain_sme", ""),
@@ -1059,7 +1155,10 @@ async def extract_company_intelligence_endpoint(
     req_company = payload.company_name.strip() if (payload and payload.company_name) else None
     company_name = req_company or contact.current_company
 
-    invalid_names = ["[unverified]", "unverified", "unknown", "pending research", "independent", "none", "n/a", ""]
+    invalid_names = [
+        "[unverified]", "unverified", "unknown", "unspecified", "not specified",
+        "pending research", "independent", "none", "n/a", "na", "tbd", "not provided", "null", ""
+    ]
     if not company_name or company_name.strip().lower() in invalid_names:
         # Try finding from executive snapshot
         sr_stmt = select(SourceResult).where(SourceResult.source_id == 'evidence_engine').order_by(SourceResult.retrieved_at.desc())
