@@ -173,10 +173,19 @@ async def semantic_match_connection(
             snapshot = sr.extracted_data['executive_snapshot']
             break
 
+    # Check problem epistemic status
+    raw_status = snapshot.get("problem_epistemic_status")
+    epistemic_status = raw_status.value if hasattr(raw_status, "value") else str(raw_status) if raw_status else None
+    
+    # Grounded statuses: Only EVIDENCE_GROUNDED permits definitive automated evidence-backed product matching.
+    # SUPPORTED_INFERENCE represents a plausible deduction that requires human/discovery validation before product recommendation.
+    is_evidence_grounded = (epistemic_status == "EVIDENCE_GROUNDED")
+    is_supported_inference = (epistemic_status == "SUPPORTED_INFERENCE")
+
     # Extract the connection's identified problem
     prob_text = ""
-    smallest = snapshot.get("smallest_solvable_problem", "").strip()
-    broad = snapshot.get("broad_business_problem", "").strip()
+    smallest = (snapshot.get("smallest_solvable_problem") or "").strip()
+    broad = (snapshot.get("broad_business_problem") or "").strip()
     current_role_str = snapshot.get("current_role") or (contact.current_title if contact else "")
     title_lower = current_role_str.lower() if current_role_str else ""
     company_str = snapshot.get("current_organization") or (contact.current_company if contact else "")
@@ -187,21 +196,31 @@ async def semantic_match_connection(
     is_broad_verified = bool(broad) and not SemanticProductMatcherService._is_unverified_problem(broad)
     is_smallest_verified = bool(smallest) and not SemanticProductMatcherService._is_unverified_problem(smallest)
 
-    if is_broad_verified:
-        prob_text = broad
+    # Epistemic safety boundary:
+    # 1. EVIDENCE_GROUNDED: Fully verified direct evidence permits automated product matching.
+    # 2. SUPPORTED_INFERENCE: Plausible deduction requiring explicit discovery validation before any product fit.
+    # 3. HYPOTHESIS_ONLY, NO_OBSERVED_PROBLEM, CONFLICTING_EVIDENCE, INSUFFICIENT_EVIDENCE, or legacy: strictly unverified.
+    if is_evidence_grounded and (is_broad_verified or is_smallest_verified):
+        prob_text = broad if is_broad_verified else smallest
         if is_doctor and "branding" not in prob_text.lower() and "content" not in prob_text.lower():
             prob_text = f"{prob_text.rstrip('.')}; doctor personal branding and medical content strategy."
         elif is_coach and "platform" not in prob_text.lower() and "course" not in prob_text.lower():
             prob_text = f"{prob_text.rstrip('.')}; structured digital course delivery platform and certification assessment workflows for coaching cohorts."
-    elif is_smallest_verified:
-        prob_text = smallest
-        if is_doctor and "branding" not in prob_text.lower() and "content" not in prob_text.lower():
-            prob_text = f"{prob_text.rstrip('.')}; doctor personal branding and medical content strategy."
-        elif is_coach and "platform" not in prob_text.lower() and "course" not in prob_text.lower():
-            prob_text = f"{prob_text.rstrip('.')}; structured digital course delivery platform and certification assessment workflows for coaching cohorts."
+    elif is_supported_inference and (is_broad_verified or is_smallest_verified):
+        raw_p = broad if is_broad_verified else smallest
+        prob_text = f"Supported inference only: {raw_p}. Requires validation before recommendation."
     else:
         # Strictly preserve unverified state: Never fabricate an operational problem when unverified
-        prob_text = "No verified business problem identified."
+        if epistemic_status == "NO_OBSERVED_PROBLEM":
+            prob_text = "No observed problem in available evidence."
+        elif epistemic_status == "CONFLICTING_EVIDENCE":
+            prob_text = "Conflicting evidence prevents reliable problem identification."
+        elif epistemic_status == "INSUFFICIENT_EVIDENCE":
+            prob_text = "Insufficient evidence to identify an operational problem."
+        elif epistemic_status == "HYPOTHESIS_ONLY":
+            prob_text = f"Unverified hypothesis only: {smallest or broad or 'Insufficient supporting evidence'}."
+        else:
+            prob_text = "No verified business problem identified."
 
     name = snapshot.get("name") or (contact.full_name if contact else "Connection")
     company = snapshot.get("current_organization") or (contact.current_company if contact else "")

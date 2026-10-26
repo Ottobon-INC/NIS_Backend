@@ -9,6 +9,14 @@ class EvidenceType(str, enum.Enum):
     INFERENCE = "INFERENCE"
     HYPOTHESIS = "HYPOTHESIS"
 
+class ProblemEpistemicStatus(str, enum.Enum):
+    EVIDENCE_GROUNDED = "EVIDENCE_GROUNDED"
+    SUPPORTED_INFERENCE = "SUPPORTED_INFERENCE"
+    HYPOTHESIS_ONLY = "HYPOTHESIS_ONLY"
+    NO_OBSERVED_PROBLEM = "NO_OBSERVED_PROBLEM"
+    CONFLICTING_EVIDENCE = "CONFLICTING_EVIDENCE"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
 class SourceResult(Base):
     __tablename__ = "source_results"
     id = Column(String, primary_key=True, index=True)

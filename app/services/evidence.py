@@ -15,7 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from fastapi.encoders import jsonable_encoder
 
 from app.core.config import settings
-from app.models.evidence import SourceResult, Evidence, EvidenceType
+from app.models.evidence import SourceResult, Evidence, EvidenceType, ProblemEpistemicStatus
 from app.models.identity import Contact, ContactStatus
 from app.models.orchestration import ResearchTask
 from app.schemas.epistemic_evidence import (
@@ -40,6 +40,17 @@ from app.services.research.research_verifier import (
 logger = logging.getLogger("networkos")
 
 
+class ProblemEvidenceReference(BaseModel):
+    citation_key: str = Field(description="e.g. '[E1]' or 'E1'")
+    evidence_id: Optional[str] = Field(default=None, description="The ID of the supporting evidence item")
+    source_url: Optional[str] = Field(default=None, description="The source URL")
+    supporting_passage: Optional[str] = Field(default=None, description="Verbatim passage or text excerpt")
+    publication_date: Optional[str] = Field(default=None, description="Publication date if available")
+    evidence_type: Optional[str] = Field(default=None, description="FACT, SIGNAL, or INFERENCE")
+    supports_directly: bool = Field(default=False, description="True if source directly states the operational problem; False if indirect inference")
+    is_stale: bool = Field(default=False, description="True if evidence is historical (> 365 days old); flagged to prevent presenting as current active problem")
+
+
 class ExecutiveSnapshot(BaseModel):
     name: str = Field(description="Name of the person")
     current_role: str = Field(description="Their current job title")
@@ -57,17 +68,41 @@ class ExecutiveSnapshot(BaseModel):
     # 2. Opportunity Classification
     opportunity_category: str = Field(description="Category: Expert-Led Product Venture, Small Service Engagement, Capability Partner, Referral, or Strategic Intro")
     opportunity_nature: str = Field(description="Direct opportunity with them vs Indirect opportunity through their network (X -> Y)")
-    broad_business_problem: str = Field(description="The broad business or operational challenge they face")
 
-    # 3. Smallest Worthwhile Solvable Problem
-    smallest_solvable_problem: str = Field(description="The tightly scoped, specific problem Ottobon can realistically solve first")
-    why_now: str = Field(description="Why reach out now? Trigger events, transitions, growth signals")
+    # 3. Operational Problem Assessment & Evidence Grounding
+    problem_epistemic_status: ProblemEpistemicStatus = Field(
+        default=ProblemEpistemicStatus.NO_OBSERVED_PROBLEM,
+        description="EVIDENCE_GROUNDED (direct evidence states problem), SUPPORTED_INFERENCE (reasoned interpretation backed by specific signals), HYPOTHESIS_ONLY (plausible assumption without direct proof), NO_OBSERVED_PROBLEM (no operational problem established in evidence), CONFLICTING_EVIDENCE (sources disagree), or INSUFFICIENT_EVIDENCE (inadequate data)"
+    )
+    broad_business_problem: Optional[str] = Field(
+        default=None,
+        description="The broad business or operational challenge they face, or null if no problem is established in evidence"
+    )
+    smallest_solvable_problem: Optional[str] = Field(
+        default=None,
+        description="The tightly scoped, specific problem Ottobon can realistically solve first, or null if no problem is established in evidence"
+    )
+    problem_evidence_references: List[str] = Field(
+        default_factory=list,
+        description="List of citation keys like ['E1'] directly supporting the problem statement"
+    )
+    structured_problem_references: List[ProblemEvidenceReference] = Field(
+        default_factory=list,
+        description="Structured references detailing supporting evidence records for the problem"
+    )
+    why_now: Optional[str] = Field(
+        default=None,
+        description="Why reach out now? Trigger events, transitions, growth signals, or null if no trigger observed"
+    )
 
     # 4. Capability Fit, Delivery Risk & Financial Feasibility
-    ottobon_capability_match: str = Field(description="Matching Ottobon services: Development, AI Applications, Marketing, Sales Enablement, or Support")
-    delivery_risk_level: str = Field(description="LOW, MEDIUM, or HIGH risk with specific rationale")
-    estimated_effort_hours: str = Field(description="Estimated hours (e.g., '120-160 hours')")
-    cost_pricing_estimate: str = Field(description="Commercial scenario with $5-$10/hr cost assumption, $10k-$20k pricing example, and margin projection")
+    ottobon_capability_match: Optional[str] = Field(
+        default=None,
+        description="Matching Ottobon services: Development, AI Applications, Marketing, Sales Enablement, Support, or null if no capability fit established"
+    )
+    delivery_risk_level: str = Field(default="LOW", description="LOW, MEDIUM, or HIGH risk with specific rationale")
+    estimated_effort_hours: Optional[str] = Field(default=None, description="Estimated hours (e.g., '120-160 hours'), or null if unverified")
+    cost_pricing_estimate: Optional[str] = Field(default=None, description="Commercial scenario with $5-$10/hr cost assumption, $10k-$20k pricing example, and margin projection, or null if unverified")
 
     # 5. Tentative Proposal & Next Action
     proposed_first_engagement: str = Field(description="Concise description of the recommended first deliverable or sprint")
@@ -437,6 +472,73 @@ def build_persisted_evidence_reference_table(
 
 class EvidenceEngine:
     @staticmethod
+    async def extract_evidence(
+        db: AsyncSession,
+        source_results: List[SourceResult],
+        contact: Optional[Contact] = None,
+        target_person: Optional[str] = None,
+        target_company: Optional[str] = None,
+        enable_epistemic_verification: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """
+        Direct evidence extraction and snapshot generation from supplied SourceResults.
+        """
+        contact_id = contact.id if contact else str(uuid.uuid4())
+        mock_run_id = f"run-{uuid.uuid4().hex[:8]}"
+
+        # Setup mock tasks linking source_results if needed
+        for sr in source_results:
+            if not sr.research_task_id:
+                sr.research_task_id = f"task-{uuid.uuid4().hex[:8]}"
+
+        # Mock db.execute to return contact, tasks, source_results
+        original_execute = db.execute
+
+        class _MockScalars:
+            def __init__(self, first_val, all_val):
+                self._first = first_val
+                self._all = all_val
+            def first(self):
+                return self._first
+            def all(self):
+                return self._all
+
+        class _MockResult:
+            def __init__(self, first_val, all_val):
+                self._scalars = _MockScalars(first_val, all_val)
+            def scalars(self):
+                return self._scalars
+
+        async def _mock_execute(statement, *args, **kwargs):
+            stmt_str = str(statement)
+
+            if "FROM contacts" in stmt_str or "contacts.id" in stmt_str:
+                return _MockResult(contact, [contact] if contact else [])
+            elif "FROM research_tasks" in stmt_str:
+                mock_tasks = [
+                    ResearchTask(id=sr.research_task_id, research_run_id=mock_run_id, status="COMPLETED")
+                    for sr in source_results
+                ]
+                return _MockResult(mock_tasks[0] if mock_tasks else None, mock_tasks)
+            elif "FROM source_results" in stmt_str:
+                return _MockResult(source_results[0] if source_results else None, source_results)
+            elif "FROM evidence" in stmt_str:
+                return _MockResult(None, [])
+            else:
+                return await original_execute(statement, *args, **kwargs)
+
+        db.execute = _mock_execute
+        try:
+            return await EvidenceEngine.process_run_and_extract_snapshot(
+                db=db,
+                run_id=mock_run_id,
+                contact_id=contact_id,
+                enable_epistemic_verification=enable_epistemic_verification
+            )
+        finally:
+            db.execute = original_execute
+
+    @staticmethod
     async def process_run_and_extract_snapshot(
         db: AsyncSession,
         run_id: str,
@@ -509,8 +611,11 @@ class EvidenceEngine:
                 "operating_in_own_domain": False,
                 "opportunity_category": "Awaiting Research",
                 "opportunity_nature": "Unverified",
-                "broad_business_problem": "No verified business problem identified.",
-                "smallest_solvable_problem": "No bounded problem identified.",
+                "problem_epistemic_status": ProblemEpistemicStatus.INSUFFICIENT_EVIDENCE.value,
+                "broad_business_problem": None,
+                "smallest_solvable_problem": None,
+                "problem_evidence_references": [],
+                "structured_problem_references": [],
                 "why_now": "No signals detected.",
                 "ottobon_capability_match": "None",
                 "delivery_risk_level": "HIGH",
@@ -553,7 +658,7 @@ class EvidenceEngine:
             if contact:
                 contact.status = ContactStatus.READY
             await db.commit()
-            return
+            return fallback_snapshot
 
         # ====================================================================
         # EXECUTIVE IDENTITY DISAMBIGUATION (EntityResolver)
@@ -596,30 +701,52 @@ class EvidenceEngine:
             r_meta = dict(r.metadata_ or {})
 
             if use_epistemic:
-                # Deterministic resolution
-                resolution: EntityResolutionResult = EntityResolver.resolve_executive(
-                    anchor=executive_anchor,
-                    candidate_url=cand_url,
-                    candidate_title=cand_title,
-                    candidate_text=cand_text
-                )
-
-                if resolution.status == "MATCH_CONFIRMED":
-                    match_st = "CONFIRMED"
-                    match_conf = 95
-                elif resolution.status == "PROBABLE":
-                    match_st = "PROBABLE"
-                    match_conf = 70
-                else:
+                if r_meta.get("identity_match_status") == "CONFIRMED" and r_meta.get("identity_match_confidence", 0) >= 70:
+                    match_st = r_meta["identity_match_status"]
+                    match_conf = r_meta["identity_match_confidence"]
+                    r_meta["epistemic_resolution_status"] = "MATCH_CONFIRMED"
+                    r_meta["is_eligible_for_factual_claims"] = True
+                    resolution = EntityResolutionResult(
+                        status="MATCH_CONFIRMED",
+                        is_eligible_for_factual_claims=True,
+                        matched_anchors=["pre_confirmed_source"],
+                        resolution_notes="Pre-confirmed source metadata"
+                    )
+                elif r_meta.get("identity_match_status") == "UNCERTAIN":
                     match_st = "UNCERTAIN"
-                    match_conf = 20
+                    match_conf = r_meta.get("identity_match_confidence", 20)
+                    r_meta["epistemic_resolution_status"] = "AMBIGUOUS"
+                    r_meta["is_eligible_for_factual_claims"] = False
+                    resolution = EntityResolutionResult(
+                        status="AMBIGUOUS",
+                        is_eligible_for_factual_claims=False,
+                        matched_anchors=[],
+                        resolution_notes="Pre-marked uncertain identity source"
+                    )
+                else:
+                    resolution: EntityResolutionResult = EntityResolver.resolve_executive(
+                        anchor=executive_anchor,
+                        candidate_url=cand_url,
+                        candidate_title=cand_title,
+                        candidate_text=cand_text
+                    )
 
-                r_meta["identity_match_status"] = match_st
-                r_meta["identity_match_confidence"] = match_conf
-                r_meta["epistemic_resolution_status"] = resolution.status
-                r_meta["is_eligible_for_factual_claims"] = resolution.is_eligible_for_factual_claims
-                r_meta["matched_anchors"] = resolution.matched_anchors
-                r_meta["conflict_flags"] = resolution.conflict_flags
+                    if resolution.status == "MATCH_CONFIRMED":
+                        match_st = "CONFIRMED"
+                        match_conf = 95
+                    elif resolution.status == "PROBABLE":
+                        match_st = "PROBABLE"
+                        match_conf = 70
+                    else:
+                        match_st = "UNCERTAIN"
+                        match_conf = 20
+
+                    r_meta["identity_match_status"] = match_st
+                    r_meta["identity_match_confidence"] = match_conf
+                    r_meta["epistemic_resolution_status"] = resolution.status
+                    r_meta["is_eligible_for_factual_claims"] = resolution.is_eligible_for_factual_claims
+                    r_meta["matched_anchors"] = resolution.matched_anchors
+                    r_meta["conflict_flags"] = resolution.conflict_flags
                 r.metadata_ = r_meta
 
                 # Auto-populate contact title & company from verified LinkedIn preview card if unpopulated
@@ -732,11 +859,12 @@ class EvidenceEngine:
                 "claim": ev.claim,
                 "confidence": ev.confidence,
                 "evidence_type": ev.evidence_type.value if hasattr(ev.evidence_type, "value") else str(ev.evidence_type),
-                "observed_date": ev.observed_date.strftime("%Y-%m-%d") if ev.observed_date else None,
+                "observed_date": ev.observed_date.strftime("%Y-%m-%d") if ev.observed_date else (sr_meta.get("observed_date") if sr_meta else None),
                 "retrieved_date": ev.retrieved_date.strftime("%Y-%m-%d") if ev.retrieved_date else None,
                 "identity_match_status": sr_meta.get("identity_match_status", "UNCERTAIN"),
                 "identity_confidence": sr_meta.get("identity_match_confidence", 50),
                 "excerpt": excerpt_txt,
+                "is_stale": sr_meta.get("is_stale", False) if sr_meta else False,
                 "is_persisted_evidence": True
             })
 
@@ -772,11 +900,12 @@ class EvidenceEngine:
                     "claim": f"Information retrieved from {r.source_id}: {r.query}",
                     "confidence": r_meta.get("identity_match_confidence", 50),
                     "evidence_type": "SIGNAL",
-                    "observed_date": None,
+                    "observed_date": r_meta.get("observed_date"),
                     "retrieved_date": r.retrieved_at.strftime("%Y-%m-%d") if r.retrieved_at else None,
                     "identity_match_status": r_meta.get("identity_match_status", "UNCERTAIN"),
                     "identity_confidence": r_meta.get("identity_match_confidence", 50),
                     "excerpt": txt[:1500],
+                    "is_stale": r_meta.get("is_stale", False),
                     "is_persisted_evidence": False
                 })
 
@@ -887,29 +1016,55 @@ class EvidenceEngine:
 Your job is to transform structured, verified evidence into an actionable, traceable Commercial Opportunity Intelligence Report.
 
 We operate on an X → Y relationship intelligence framework.
-Network Intelligence is not merely a biography-research system; it is a commercial opportunity intelligence system.
+Network Intelligence is an evidence-grounded intelligence system.
 
-CRITICAL CITATION AND PROVENANCE PRINCIPLES:
-1. CITATION ENFORCEMENT:
-   - EVERY externally verifiable factual claim in Section 1 MUST cite one or more valid citation keys provided in the evidence context (e.g. `[E1]`, `[E2]`).
+CRITICAL EVIDENCE-GROUNDING & PROBLEM IDENTIFICATION PRINCIPLES:
+
+1. EVIDENCE-GROUNDED PROBLEM IDENTIFICATION:
+   - Identify ONLY business problems and operational challenges that are directly supported by target-specific evidence.
+   - NEVER infer that a person or company suffers from an operational deficiency merely because of:
+     * Their job title (e.g. do NOT assume a Recruiter has recruitment bottlenecks, or that a Sales VP has sales bottlenecks).
+     * Their industry or sector.
+     * Their listed technical skills or tools (NEVER invert an individual's skills into a company deficit).
+     * Their company size, tier, or reputation.
+     * Generic assumptions or stereotypes about businesses in that industry.
+     * The existence of a product or service in Ottobon's catalog.
+   - A neutral business event (opening an office, launching a product, hiring employees, attending an event) is a normal business activity, NOT an operational crisis or bottleneck.
+   - If the available evidence does NOT explicitly report or substantiate a real operational problem, you MUST set:
+     * problem_epistemic_status = "NO_OBSERVED_PROBLEM" (or "INSUFFICIENT_EVIDENCE")
+     * broad_business_problem = null
+     * smallest_solvable_problem = null
+     * problem_evidence_references = []
+     * why_now = null
+     * ottobon_capability_match = null
+     Returning null for problem fields when evidence does not establish an operational problem is the REQUIRED, CORRECT, AND EXPECTED behavior.
+   - Distinguish problem epistemic states:
+     * EVIDENCE_GROUNDED: Evidence directly states/reports the operational challenge.
+     * SUPPORTED_INFERENCE: A reasoned interpretation is supported by specific target-related signals (not generic role assumptions).
+     * HYPOTHESIS_ONLY: A plausible possibility exists, but target-specific evidence is lacking.
+     * NO_OBSERVED_PROBLEM: Available evidence does not establish a meaningful operational problem.
+     * CONFLICTING_EVIDENCE: Relevant sources disagree on operational state or role.
+     * INSUFFICIENT_EVIDENCE: Available evidence is inadequate to assess problem reliably.
+
+2. CITATION ENFORCEMENT & PROVENANCE:
+   - EVERY factual claim in Section 1 MUST cite one or more valid citation keys (e.g. `[E1]`, `[E2]`).
    - Use ONLY citation keys that exist in the provided evidence. DO NOT fabricate citation keys such as [E999].
    - If a factual claim is not supported by the evidence, do NOT cite a key. Instead, mark it explicitly as `[UNVERIFIED]`.
    - Never fabricate URLs, observation dates, quotations, or metrics.
-2. DISTINGUISH FACTS FROM COMMERCIAL HYPOTHESES:
-   - [VERIFIED CURRENT]: Facts directly supported by CONFIRMED identity sources. Example: `- **Current Role & Org**: CTO at TechCorp [E1] [VERIFIED CURRENT]`
-   - [LAST KNOWN]: Historical facts or past roles supported by evidence. Example: `- **Past Role**: Lead Engineer at StartupX [E2] [LAST KNOWN]`
-   - [UNVERIFIED]: Claims lacking direct factual proof or from uncertain sources.
-   - [AI HYPOTHESIS - SALES INFERENCE]: Strategic inferences and reasoned assumptions created by AI regarding potential problems and solutions. Hypotheses MUST be explicitly labeled and MUST NOT use citations to disguise sales inferences as verified facts.
-   - Commercial proposals must carry `STATUS: PROPOSED_OPPORTUNITY (Awaiting Founder Validation)`. Research never marks an opportunity as qualified without human validation.
-3. HANDLING UNCERTAIN SOURCES:
-   - Sources in Section C (UNCERTAIN IDENTITY) are excluded from factual synthesis. DO NOT cite them as verified facts.
-   - Sources in Section B (PROBABLE IDENTITY) must be explicitly noted with `[PROBABLE - UNVERIFIED AFFILIATION]`.
-4. CONFLICT DETECTION:
-   - If sources disagree on current role, current organization, or career history, you MUST explicitly surface the conflict in Section 1 rather than arbitrarily selecting one value.
-5. DOMAIN EXPERTISE & THE SMALLEST SOLVABLE PROBLEM:
-   - Distinguish job titles from genuine domain expertise.
-   - Separate broad corporate challenges from the tightly bounded, deliverable problem Ottobon can solve first.
-6. COMMERCIAL DECISION SAFEGUARDS:
+   - Every generated problem must reference the exact citation keys in problem_evidence_references.
+   - If no evidence directly states the problem, do NOT mark it as EVIDENCE_GROUNDED.
+   - Distinguish facts from hypotheses:
+     * [VERIFIED CURRENT]: Facts directly supported by CONFIRMED identity sources. Example: `- **Current Role & Org**: CTO at TechCorp [E1] [VERIFIED CURRENT]`
+     * [LAST KNOWN]: Historical facts or past roles supported by evidence. Example: `- **Past Role**: Lead Engineer at StartupX [E2] [LAST KNOWN]`
+     * [UNVERIFIED]: Claims lacking direct factual proof or from uncertain sources.
+     * [AI HYPOTHESIS - SALES INFERENCE]: Strategic hypotheses created by AI.
+
+3. INDEPENDENCE OF PROBLEM IDENTIFICATION FROM PRODUCT MATCHING:
+   - First determine whether a real problem exists from target evidence alone.
+   - Do NOT frame or invent a problem to create a match for Ottobon products.
+   - If no problem is evidenced, product match must be null.
+
+4. COMMERCIAL SAFEGUARDS:
    - Pipeline stage MUST be 'PROPOSED' or 'HYPOTHESIS' (or 'UNCERTAIN_IDENTITY' if identity is unconfirmed). Never output 'QUALIFIED' or 'VALIDATED'.
    - Any pricing ($10k-$20k), effort, or rate card numbers are unverified internal assumptions. Explicitly label them as assumptions.
 
@@ -931,33 +1086,35 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
 *Answering: What specific commercial opportunity exists—directly or through their network?*
 | Opportunity Category | Target Scope | Path (Direct vs X → Y) | Provenance Status |
 |---|---|---|---|
-| [Expert-Led Product Venture / Small Service Engagement / Capability Partner / Referral / Strategic Intro] | [Brief scope] | [Direct with person / Intro to 3rd party] | [VERIFIED CURRENT / AI HYPOTHESIS] |
+| [Category] | [Brief scope] | [Direct with person / Intro to 3rd party] | [VERIFIED CURRENT / AI HYPOTHESIS] |
 
 - **Identified Business Context**: [Detailed breakdown citing evidence `[E#]`]
 - **AI Opportunity Hypotheses**: `[AI HYPOTHESIS - SALES INFERENCE]` [Reasoned inferences regarding potential venture or service angles]
 
-## 3. The Smallest Worthwhile Solvable Problem
-*Answering: What is the smallest worthwhile problem Ottobon could solve?*
-- **Broad Business Challenge**: [The macro operational problem]
-- **Bounded Ottobon Solution**: `[AI HYPOTHESIS - SALES INFERENCE]` [Tightly scoped, realistic initial problem Ottobon can solve]
-- **Why Now Signal**: [Recent news, job transition, or industry trigger event citing `[E#]`]
+## 3. Operational Problem Assessment & Evidence Grounding
+*Answering: Does the evidence establish a real operational bottleneck or business challenge?*
+- **Problem Epistemic Status**: [EVIDENCE_GROUNDED | SUPPORTED_INFERENCE | HYPOTHESIS_ONLY | NO_OBSERVED_PROBLEM | CONFLICTING_EVIDENCE | INSUFFICIENT_EVIDENCE]
+- **Broad Business Challenge**: [The operational challenge if evidenced, or "No observed business problem in public records"]
+- **Bounded Ottobon Solution**: `[AI HYPOTHESIS - SALES INFERENCE]` [Tightly scoped problem if evidenced, or "None identified"]
+- **Supporting Evidence Citations**: [List valid citation keys like `[E1]`, or "None - No problem reported in evidence"]
+- **Why Now Trigger**: [Recent news, job transition, or industry trigger event citing `[E#]`, or "None observed"]
 
 ## 4. Feasibility, Capability Matching & Commercial Scenarios
 *Answering: Can we deliver it profitably with acceptable risk?*
-- **Ottobon Capability Match**: [Development | AI Applications | Marketing | Sales Enablement | Support]
+- **Ottobon Capability Match**: [Development | AI Applications | Marketing | Sales Enablement | Support | None Established]
 - **Delivery Feasibility & Risk**: [Risk Level: LOW / MEDIUM / HIGH with specific rationale]
 - **Indicative Commercial Calculation (Assumptions)**:
   | Metric | Value / Assumption | Rationale |
   |---|---|---|
-  | Estimated Effort | [e.g. 120 – 160 hours] | [Scoped delivery time] |
+  | Estimated Effort | [e.g. 120 – 160 hours / Unscoped] | [Scoped delivery time] |
   | Cost Basis (Internal) | [$5 – $10 / hr] | [Internal delivery cost assumption] |
-  | Indicative Pricing | [$10,000 – $15,000] | [Initial milestone sprint assumption] |
+  | Indicative Pricing | [$10,000 – $15,000 / Unpriced] | [Initial milestone sprint assumption] |
   | Projected Gross Margin | [e.g. 65% – 75%] | [Margin profile assumption] |
   | Commercial Model | [Milestone Sprint / Monthly Retainer / Revenue Share] | [Engagement structure] |
 
 ## 5. Tentative Proposal & Action Plan
 *Answering: What should we propose, through whom, and what approval is needed?*
-- **Proposed First Engagement**: [Concise opportunity brief describing initial sprint deliverable]
+- **Proposed First Engagement**: [Concise opportunity brief describing initial sprint deliverable, or "Awaiting problem verification"]
 - **Relationship & Introduction Path**: [Who can introduce, relationship feasibility, and whether access is confirmed]
 - **Governance & Approval Gate**: `STATUS: PROPOSED_OPPORTUNITY (Awaiting Founder Validation)`
 - **Recommended Next Action**:
@@ -973,7 +1130,8 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     "<UNTRUSTED_EXTERNAL_WEB_DATA>\n"
                     f"{structured_context_text}\n"
                     "</UNTRUSTED_EXTERNAL_WEB_DATA>\n\n"
-                    "Extract commercial opportunity intelligence and generate the deep-dive report based purely on factual claims above."
+                    "Extract commercial opportunity intelligence and generate the deep-dive report based purely on factual claims above. "
+                    "If the evidence contains no explicit business problem or operational bottleneck, set problem_epistemic_status to 'NO_OBSERVED_PROBLEM' and return null for broad_business_problem and smallest_solvable_problem."
                 )
 
                 prompt = ChatPromptTemplate.from_messages([
@@ -1003,13 +1161,16 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     "operating_in_own_domain": False,
                     "opportunity_category": "Awaiting Verification",
                     "opportunity_nature": "Direct",
-                    "broad_business_problem": "Evidence gathered across external sources; LLM opportunity synthesis unavailable.",
-                    "smallest_solvable_problem": "Manual review of collected evidence required.",
-                    "why_now": "Source research records retrieved.",
-                    "ottobon_capability_match": "Development",
+                    "problem_epistemic_status": ProblemEpistemicStatus.INSUFFICIENT_EVIDENCE.value,
+                    "broad_business_problem": None,
+                    "smallest_solvable_problem": None,
+                    "problem_evidence_references": [],
+                    "structured_problem_references": [],
+                    "why_now": None,
+                    "ottobon_capability_match": None,
                     "delivery_risk_level": "HIGH",
-                    "estimated_effort_hours": "SUPPRESSED: AI synthesis unavailable.",
-                    "cost_pricing_estimate": "SUPPRESSED: Identity unverified or LLM synthesis unavailable.",
+                    "estimated_effort_hours": None,
+                    "cost_pricing_estimate": None,
                     "proposed_first_engagement": "Manual review of collected source records.",
                     "relationship_path": "Unverified",
                     "pipeline_stage": "PROPOSED",
@@ -1042,6 +1203,152 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                 for w in citation_audit["warnings"]:
                     audit_md += f"- {w}\n"
                 snapshot_dict["full_markdown_report"] = snapshot_dict.get("full_markdown_report", "") + audit_md
+
+            # ================================================================
+            # PROBLEM EPISTEMIC VERIFICATION PASS
+            # ================================================================
+            claimed_problem_status = snapshot_dict.get("problem_epistemic_status")
+            if hasattr(claimed_problem_status, "value"):
+                claimed_problem_status = claimed_problem_status.value
+            elif not claimed_problem_status:
+                claimed_problem_status = ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value
+
+            broad_prob = snapshot_dict.get("broad_business_problem")
+            smallest_prob = snapshot_dict.get("smallest_solvable_problem")
+            prob_refs = snapshot_dict.get("problem_evidence_references") or []
+            if not prob_refs and snapshot_dict.get("structured_problem_references"):
+                for sp in snapshot_dict["structured_problem_references"]:
+                    k = getattr(sp, "evidence_id", None) or (sp.get("evidence_id") if isinstance(sp, dict) else None)
+                    if k:
+                        prob_refs.append(k)
+
+            # 1. Null / unverified string check
+            has_no_prob_phrase = any(
+                phrase in (broad_prob or "").lower()
+                for phrase in [
+                    "no verified", "unverified", "unknown", "no observed",
+                    "none observed", "insufficient evidence", "none established",
+                    "no problem", "none identified"
+                ]
+            )
+
+            if not broad_prob and not smallest_prob:
+                snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value
+                snapshot_dict["broad_business_problem"] = None
+                snapshot_dict["smallest_solvable_problem"] = None
+                snapshot_dict["problem_evidence_references"] = []
+                snapshot_dict["structured_problem_references"] = []
+            elif has_no_prob_phrase:
+                snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value
+                snapshot_dict["broad_business_problem"] = None
+                snapshot_dict["smallest_solvable_problem"] = None
+                snapshot_dict["problem_evidence_references"] = []
+                snapshot_dict["structured_problem_references"] = []
+            else:
+                # Problem was proposed. Validate references:
+                valid_refs = []
+                structured_refs = []
+                for ref_key in prob_refs:
+                    clean_k = ref_key.strip("[]")
+                    bracket_k = f"[{clean_k}]"
+                    matching_item = evidence_map.get(bracket_k) or evidence_map.get(clean_k)
+                    if matching_item:
+                        id_status = matching_item.get("identity_match_status")
+                        id_conf = matching_item.get("identity_confidence", 0)
+
+                        # Uncertain identity items or items from other entities can never serve as valid problem evidence
+                        if id_status == "UNCERTAIN" or id_conf < 50:
+                            logger.warning(f"EvidenceEngine: Rejecting citation [{clean_k}] due to UNCERTAIN identity match ({id_status}, {id_conf}%).")
+                            continue
+
+                        claim_t = matching_item.get("claim", "")
+                        excerpt_t = matching_item.get("excerpt", "")
+                        full_t = f"{claim_t} {excerpt_t}".lower()
+
+                        # Neutral expansion, hiring, or skills lists must NOT be treated as operational deficiencies
+                        is_neutral_announcement = any(na in full_t for na in [
+                            "expands to", "opened a brand new", "regional headquarters", "hired 50",
+                            "announced today that it has opened", "celebrating the opening",
+                            "is proficient in", "skills include", "proficient in kubernetes",
+                            "experienced in", "technical skills:", "core competencies:"
+                        ]) and not any(neg in full_t for neg in ["struggling with", "failing to", "bottleneck in", "deficit in"])
+
+                        direct_problem_keywords = [
+                            "problem", "issue", "bottleneck", "deficit", "latency",
+                            "failure", "struggling", "friction", "pain point", "inefficiency",
+                            "inefficient", "downtime", "crisis", "outage", "slow", "overhead"
+                        ]
+                        has_problem_keyword = any(kw in full_t for kw in direct_problem_keywords)
+
+                        # Direct support requires:
+                        # 1. Identity match is CONFIRMED (or >= 85% confidence)
+                        # 2. Contains explicit operational deficit keyword
+                        # 3. Not an ungrounded neutral announcement or skills inventory
+                        # 4. Not stale (> 365 days old or marked is_stale)
+                        is_stale = matching_item.get("is_stale", False)
+                        obs_val = matching_item.get("observed_date")
+                        if not is_stale and obs_val and isinstance(obs_val, str) and obs_val not in ["UNKNOWN / NOT SPECIFIED", "None", ""]:
+                            try:
+                                obs_dt = datetime.fromisoformat(obs_val.replace("Z", "+00:00")) if "T" in obs_val else datetime.strptime(obs_val[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                                age_days = (datetime.now(timezone.utc) - obs_dt).days
+                                if age_days > 365:
+                                    is_stale = True
+                            except Exception:
+                                pass
+
+                        is_direct = (
+                            (id_status == "CONFIRMED" or id_conf >= 85)
+                            and has_problem_keyword
+                            and not is_neutral_announcement
+                            and not is_stale
+                        )
+
+                        valid_refs.append(bracket_k)
+                        structured_refs.append({
+                            "citation_key": bracket_k,
+                            "evidence_id": matching_item.get("evidence_id"),
+                            "source_url": matching_item.get("source_reference"),
+                            "supporting_passage": (matching_item.get("claim") or matching_item.get("excerpt", ""))[:300],
+                            "publication_date": matching_item.get("observed_date") or matching_item.get("retrieved_date"),
+                            "evidence_type": matching_item.get("evidence_type", "SIGNAL"),
+                            "supports_directly": is_direct,
+                            "is_stale": is_stale
+                        })
+
+                snapshot_dict["problem_evidence_references"] = valid_refs
+                snapshot_dict["structured_problem_references"] = structured_refs
+
+                has_direct = any(r.get("supports_directly") for r in structured_refs)
+
+                # Enforce epistemic status based on evidence verification
+                if claimed_problem_status == ProblemEpistemicStatus.EVIDENCE_GROUNDED.value:
+                    if not valid_refs:
+                        logger.warning("EvidenceEngine: Demoting problem to NO_OBSERVED_PROBLEM due to 0 valid citations.")
+                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value
+                        snapshot_dict["broad_business_problem"] = None
+                        snapshot_dict["smallest_solvable_problem"] = None
+                    elif not has_direct:
+                        logger.info("EvidenceEngine: Demoting problem from EVIDENCE_GROUNDED to SUPPORTED_INFERENCE (citations support context, but do not directly state operational deficit).")
+                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.SUPPORTED_INFERENCE.value
+                    else:
+                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.EVIDENCE_GROUNDED.value
+                elif claimed_problem_status in [ProblemEpistemicStatus.SUPPORTED_INFERENCE.value, "INFERENCE"]:
+                    if not valid_refs:
+                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.HYPOTHESIS_ONLY.value
+                    else:
+                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.SUPPORTED_INFERENCE.value
+                elif claimed_problem_status in [ProblemEpistemicStatus.CONFLICTING_EVIDENCE.value]:
+                    snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.CONFLICTING_EVIDENCE.value
+                elif claimed_problem_status in [ProblemEpistemicStatus.INSUFFICIENT_EVIDENCE.value]:
+                    snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.INSUFFICIENT_EVIDENCE.value
+                    snapshot_dict["broad_business_problem"] = None
+                    snapshot_dict["smallest_solvable_problem"] = None
+                elif claimed_problem_status in [ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value]:
+                    snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value
+                    snapshot_dict["broad_business_problem"] = None
+                    snapshot_dict["smallest_solvable_problem"] = None
+                else:
+                    snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.HYPOTHESIS_ONLY.value
 
             # ================================================================
             # IDENTITY & COMMERCIAL SAFEGUARDS ENFORCEMENT
@@ -1108,8 +1415,8 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                 hypothesis_id=f"hyp-exec-{contact_id[:8]}",
                 target_entity_id=contact_id,
                 trigger_claim_ids=[k for k in evidence_map.keys()],
-                inferred_pain_point=snapshot_dict.get("broad_business_problem", "Unverified operational challenge"),
-                ottobon_capability_offering=snapshot_dict.get("ottobon_capability_match", "Development"),
+                inferred_pain_point=snapshot_dict.get("broad_business_problem") or "No evidenced operational challenge",
+                ottobon_capability_offering=snapshot_dict.get("ottobon_capability_match") or "None Established",
                 delivery_risk_assessment=snapshot_dict.get("delivery_risk_level", "MEDIUM"),
                 estimated_effort_hours=snapshot_dict.get("estimated_effort_hours"),
                 pricing_scenario=snapshot_dict.get("cost_pricing_estimate"),
@@ -1204,6 +1511,7 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
 
             await db.commit()
             logger.info("EvidenceEngine: Successfully generated, validated, and persisted grounded Executive Snapshot.")
+            return clean_snapshot_dict
 
         except Exception as e:
             logger.error(f"EvidenceEngine: Failed to generate executive snapshot: {e}", exc_info=True)

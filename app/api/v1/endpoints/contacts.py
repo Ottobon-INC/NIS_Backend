@@ -666,13 +666,25 @@ async def get_contact_360_data(
             "provenDomainExpertise": snapshot.get("proven_domain_expertise", ""),
             "isDomainSme": snapshot.get("is_domain_sme", ""),
             "opportunityCategory": snapshot.get("opportunity_category", ""),
-            "broadBusinessProblem": snapshot.get("broad_business_problem", ""),
-            "smallestSolvableProblem": snapshot.get("smallest_solvable_problem", ""),
-            "whyNow": snapshot.get("why_now", ""),
-            "ottobonCapabilityMatch": snapshot.get("ottobon_capability_match", ""),
+            "broadBusinessProblem": snapshot.get("broad_business_problem") or None,
+            "smallestSolvableProblem": snapshot.get("smallest_solvable_problem") or None,
+            "problemEpistemicStatus": (
+                snapshot.get("problem_epistemic_status").value
+                if hasattr(snapshot.get("problem_epistemic_status"), "value")
+                else str(snapshot.get("problem_epistemic_status") or "INSUFFICIENT_EVIDENCE")
+            ),
+            "problem_epistemic_status": (
+                snapshot.get("problem_epistemic_status").value
+                if hasattr(snapshot.get("problem_epistemic_status"), "value")
+                else str(snapshot.get("problem_epistemic_status") or "INSUFFICIENT_EVIDENCE")
+            ),
+            "structuredProblemReferences": snapshot.get("structured_problem_references", []),
+            "structured_problem_references": snapshot.get("structured_problem_references", []),
+            "whyNow": snapshot.get("why_now") or None,
+            "ottobonCapabilityMatch": snapshot.get("ottobon_capability_match") or None,
             "deliveryRiskLevel": snapshot.get("delivery_risk_level", "LOW"),
-            "estimatedEffortHours": snapshot.get("estimated_effort_hours", ""),
-            "costPricingEstimate": snapshot.get("cost_pricing_estimate", ""),
+            "estimatedEffortHours": snapshot.get("estimated_effort_hours") or None,
+            "costPricingEstimate": snapshot.get("cost_pricing_estimate") or None,
             "proposedFirstEngagement": snapshot.get("proposed_first_engagement", ""),
             "relationshipPath": snapshot.get("relationship_path", ""),
             "pipelineStage": effective_pipeline_stage,

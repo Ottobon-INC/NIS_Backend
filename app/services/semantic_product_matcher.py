@@ -326,6 +326,11 @@ class SemanticProductMatcherService:
             "unverified",
             "not verified",
             "no explicit problem",
+            "no observed problem",
+            "insufficient evidence",
+            "conflicting evidence",
+            "hypothesis only",
+            "unverified hypothesis",
             "pending research",
             "unknown",
             "none",
@@ -881,7 +886,7 @@ Evaluate whether any of our products are suitable solutions. Choose strictly one
             # Standardize outcomes and statuses
             if res.matching_outcome == MatchingOutcome.INSUFFICIENT_INFORMATION or str(res.matching_outcome) == "INSUFFICIENT_INFORMATION":
                 res.matching_outcome = MatchingOutcome.INSUFFICIENT_INFORMATION
-                res.suggested_status = "Insufficient Information"
+                res.suggested_status = "Problem Unverified" if cls._is_unverified_problem(problem_text) else "Insufficient Information"
                 res.matches = []
                 if not res.missing_information:
                     res.missing_information = [
@@ -917,6 +922,20 @@ Evaluate whether any of our products are suitable solutions. Choose strictly one
                     res.capability_gap = res.capability_gap or "No product in the active catalog matches the identified business friction."
                 else:
                     res.matching_outcome = MatchingOutcome.MATCH_FOUND
+                    catalog_id_map = {
+                        "talentops": "prod-talentops",
+                        "sbloom": "prod-sbloom",
+                        "janmasethu": "prod-janmasethu",
+                        "ottobon course platform": "prod-ottobon-courses",
+                        "ottobon courses": "prod-ottobon-courses",
+                        "networkos platform": "prod-networkos",
+                        "networkos": "prod-networkos"
+                    }
+                    for m in res.matches:
+                        if not m.product_id or m.product_id not in [p["id"] for p in cls.PRODUCT_CATALOG]:
+                            norm_name = m.product_name.strip().lower()
+                            if norm_name in catalog_id_map:
+                                m.product_id = catalog_id_map[norm_name]
                     product_names = [m.product_name for m in res.matches]
                     res.suggested_status = f"MATCH FOUND: {res.matches[0].product_name}" if len(product_names) == 1 else f"MATCHES FOUND: {', '.join(product_names)}"
                     if not res.recommended_next_step:
