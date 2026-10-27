@@ -207,8 +207,7 @@ async def semantic_match_connection(
         elif is_coach and "platform" not in prob_text.lower() and "course" not in prob_text.lower():
             prob_text = f"{prob_text.rstrip('.')}; structured digital course delivery platform and certification assessment workflows for coaching cohorts."
     elif is_supported_inference and (is_broad_verified or is_smallest_verified):
-        raw_p = broad if is_broad_verified else smallest
-        prob_text = f"Supported inference only: {raw_p}. Requires validation before recommendation."
+        prob_text = broad if is_broad_verified else smallest
     else:
         # Strictly preserve unverified state: Never fabricate an operational problem when unverified
         if epistemic_status == "NO_OBSERVED_PROBLEM":

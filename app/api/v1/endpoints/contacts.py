@@ -140,11 +140,35 @@ async def list_contacts(
 
     out = []
     has_updates = False
+    seen_contacts = set()
+    dummy_names = {
+        "conflict lead", "contact a", "contact b", "placeholder test contact",
+        "empty run candidate", "date test candidate", "null test", "direct lookup user",
+        "valid contact", "foreign corp executive", "low confidence candidate",
+        "plan test candidate", "test unres slug", "uncertain lead", "unknown profile",
+        "assumptions lead", "competitor contact", "confirmed executive",
+        "confidence test", "compat test candidate", "alice candidate"
+    }
 
     for c in contacts:
+        if c.id.startswith(("test-", "contact-a-", "contact-b-", "contact-other-", "contact-test-", "c-foreign-", "c-err-")):
+            continue
+
         name = c.full_name
         title = c.current_title
         company = c.current_company
+
+        if name and name.strip().lower() in dummy_names:
+            continue
+
+        key = (
+            (name or "").strip().lower(),
+            (company or "").strip().lower()
+        )
+        if key[0] and key in seen_contacts:
+            continue
+        if key[0]:
+            seen_contacts.add(key)
 
         if not name or name == "Unknown":
             if c.profile_url:

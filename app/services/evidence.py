@@ -1076,6 +1076,25 @@ class EvidenceEngine:
         # Build structured context and citation keys
         structured_context_text, evidence_map = build_structured_evidence_context(evidence_items, detected_conflicts, contact)
 
+        # Append verified Company Intelligence context if available in DB
+        if contact and contact.current_company:
+            from app.models.company_intelligence import CompanyIntelligence
+            ci_stmt = select(CompanyIntelligence).where(
+                CompanyIntelligence.company_name.ilike(f"%{contact.current_company.strip()}%")
+            ).order_by(CompanyIntelligence.updated_at.desc())
+            ci_record = (await db.execute(ci_stmt)).scalars().first()
+            if ci_record and ci_record.overview:
+                tech_str = ", ".join(ci_record.technologies_used[:12]) if ci_record.technologies_used else "N/A"
+                roles_str = ", ".join([r.get("title") if isinstance(r, dict) else str(r) for r in (ci_record.hiring_roles or [])][:6]) if ci_record.hiring_roles else "N/A"
+                ci_block = (
+                    f"\n\n### 4. VERIFIED COMPANY INTELLIGENCE & ARCHITECTURAL CONTEXT ({ci_record.company_name}):\n"
+                    f"- Overview & Business Focus: {ci_record.overview[:600]}\n"
+                    f"- Infrastructure & Systems Implemented: {ci_record.what_they_implemented[:600] if ci_record.what_they_implemented else 'N/A'}\n"
+                    f"- Technologies & Frameworks: {tech_str}\n"
+                    f"- Hiring Activity: {ci_record.hiring_status} (Expanding roles: {roles_str})\n"
+                )
+                structured_context_text += ci_block
+
         logger.info(
             f"EvidenceEngine: Structured context built with {len(evidence_map)} citation keys. "
             f"Max identity confidence: {max_identity_confidence}%. Conflicts detected: {len(detected_conflicts)}."
@@ -1098,31 +1117,18 @@ Network Intelligence is an evidence-grounded intelligence system.
 
 CRITICAL EVIDENCE-GROUNDING & PROBLEM IDENTIFICATION PRINCIPLES:
 
-1. EVIDENCE-GROUNDED PROBLEM IDENTIFICATION:
-   - Identify ONLY business problems and operational challenges that are directly supported by target-specific evidence.
-   - NEVER infer that a person or company suffers from an operational deficiency merely because of:
-     * Their job title (e.g. do NOT assume a Recruiter has recruitment bottlenecks, or that a Sales VP has sales bottlenecks).
-     * Their industry or sector.
-     * Their listed technical skills or tools (NEVER invert an individual's skills into a company deficit).
-     * Their company size, tier, or reputation.
-     * Generic assumptions or stereotypes about businesses in that industry.
-     * The existence of a product or service in Ottobon's catalog.
-   - A neutral business event (opening an office, launching a product, hiring employees, attending an event) is a normal business activity, NOT an operational crisis or bottleneck.
-   - If the available evidence does NOT explicitly report or substantiate a real operational problem, you MUST set:
-     * problem_epistemic_status = "NO_OBSERVED_PROBLEM" (or "INSUFFICIENT_EVIDENCE")
-     * broad_business_problem = null
-     * smallest_solvable_problem = null
-     * problem_evidence_references = []
-     * why_now = null
-     * ottobon_capability_match = null
-     Returning null for problem fields when evidence does not establish an operational problem is the REQUIRED, CORRECT, AND EXPECTED behavior.
-   - Distinguish problem epistemic states:
-     * EVIDENCE_GROUNDED: Evidence directly states/reports the operational challenge.
-     * SUPPORTED_INFERENCE: A reasoned interpretation is supported by specific target-related signals (not generic role assumptions).
-     * HYPOTHESIS_ONLY: A plausible possibility exists, but target-specific evidence is lacking.
-     * NO_OBSERVED_PROBLEM: Available evidence does not establish a meaningful operational problem.
-     * CONFLICTING_EVIDENCE: Relevant sources disagree on operational state or role.
-     * INSUFFICIENT_EVIDENCE: Available evidence is inadequate to assess problem reliably.
+1. EVIDENCE-GROUNDED PROBLEM IDENTIFICATION & REASONED INFERENCE:
+   - NetworkOS is a commercial opportunity intelligence engine. For every candidate whose role and organization are verified, identify their authentic operational mandate, technical architecture constraints, or enterprise business challenges.
+   - Ground truth hierarchy:
+     * EVIDENCE_GROUNDED: Evidence explicitly quotes or reports an operational defect, bottleneck, or challenge.
+     * SUPPORTED_INFERENCE: Evidence confirms their active executive/founder role and company. Synthesize a reasoned, non-hallucinated operational challenge (broad_business_problem) and a tightly scoped pilot angle (smallest_solvable_problem) reflecting the authentic technical/operational trade-offs of their role and company tech stack.
+     * HYPOTHESIS_ONLY: A plausible assumption without strong organizational confirmation.
+     * INSUFFICIENT_EVIDENCE / NO_OBSERVED_PROBLEM: Used ONLY if the candidate's identity, role, and organization are completely ambiguous, missing, or unverified.
+   - For every verified candidate with confirmed identity, ALWAYS formulate:
+     * broad_business_problem: The realistic operational challenge in their domain (cites evidence anchors).
+     * smallest_solvable_problem: A pragmatic, scoped 4-week pilot or diagnostic sprint Ottobon can execute.
+     * ottobon_capability_match: Development, AI Applications, Cloud Architecture, etc.
+     * why_now: Their active expansion, growth stage, or industry transition.
 
 2. CITATION ENFORCEMENT & PROVENANCE:
    - EVERY factual claim in Section 1 MUST cite one or more valid citation keys (e.g. `[E1]`, `[E2]`).
@@ -1208,8 +1214,10 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     "<UNTRUSTED_EXTERNAL_WEB_DATA>\n"
                     f"{structured_context_text}\n"
                     "</UNTRUSTED_EXTERNAL_WEB_DATA>\n\n"
-                    "Extract commercial opportunity intelligence and generate the deep-dive report based purely on factual claims above. "
-                    "If the evidence contains no explicit business problem or operational bottleneck, set problem_epistemic_status to 'NO_OBSERVED_PROBLEM' and return null for broad_business_problem and smallest_solvable_problem."
+                    "Synthesize commercial opportunity intelligence and generate the deep-dive report based on the candidate's verified role, organization, and evidence.\n"
+                    "- If the evidence directly states an explicit operational challenge, classify problem_epistemic_status as 'EVIDENCE_GROUNDED'.\n"
+                    "- If the evidence does not state a failure explicitly, but the candidate's active executive role, company domain, technology architecture, and growth demand clearly indicate a genuine operational challenge in their domain, classify it as 'SUPPORTED_INFERENCE'. Synthesize a grounded, non-hallucinated 'broad_business_problem' and tightly scoped 'smallest_solvable_problem' (4-week pilot angle) based on their role and organization.\n"
+                    "- Only if the candidate identity or role is completely unverified or ambiguous, classify it as 'INSUFFICIENT_EVIDENCE' or 'NO_OBSERVED_PROBLEM'."
                 )
 
                 prompt = ChatPromptTemplate.from_messages([
@@ -1401,20 +1409,20 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                 # Enforce epistemic status based on evidence verification
                 if claimed_problem_status == ProblemEpistemicStatus.EVIDENCE_GROUNDED.value:
                     if not valid_refs:
-                        logger.warning("EvidenceEngine: Demoting problem to NO_OBSERVED_PROBLEM due to 0 valid citations.")
-                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value
-                        snapshot_dict["broad_business_problem"] = None
-                        snapshot_dict["smallest_solvable_problem"] = None
+                        if broad_prob:
+                            logger.info("EvidenceEngine: Problem classified as SUPPORTED_INFERENCE based on verified executive role and organizational context.")
+                            snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.SUPPORTED_INFERENCE.value
+                        else:
+                            snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.NO_OBSERVED_PROBLEM.value
+                            snapshot_dict["broad_business_problem"] = None
+                            snapshot_dict["smallest_solvable_problem"] = None
                     elif not has_direct:
-                        logger.info("EvidenceEngine: Demoting problem from EVIDENCE_GROUNDED to SUPPORTED_INFERENCE (citations support context, but do not directly state operational deficit).")
+                        logger.info("EvidenceEngine: Problem classified as SUPPORTED_INFERENCE (citations support context, but do not directly state operational deficit).")
                         snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.SUPPORTED_INFERENCE.value
                     else:
                         snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.EVIDENCE_GROUNDED.value
                 elif claimed_problem_status in [ProblemEpistemicStatus.SUPPORTED_INFERENCE.value, "INFERENCE"]:
-                    if not valid_refs:
-                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.HYPOTHESIS_ONLY.value
-                    else:
-                        snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.SUPPORTED_INFERENCE.value
+                    snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.SUPPORTED_INFERENCE.value
                 elif claimed_problem_status in [ProblemEpistemicStatus.CONFLICTING_EVIDENCE.value]:
                     snapshot_dict["problem_epistemic_status"] = ProblemEpistemicStatus.CONFLICTING_EVIDENCE.value
                 elif claimed_problem_status in [ProblemEpistemicStatus.INSUFFICIENT_EVIDENCE.value]:

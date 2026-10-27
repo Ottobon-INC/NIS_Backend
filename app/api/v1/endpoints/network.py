@@ -88,9 +88,41 @@ async def get_network_graph(
     edges: List[Dict[str, Any]] = []
 
     seen_nodes = {"bhanu-root"}
+    seen_person_keys = set()
+
+    # Filter helper to reject dummy / test fixtures
+    def is_test_fixture(c: Contact) -> bool:
+        if not c.full_name:
+            return True
+        name = c.full_name.strip().lower()
+        dummy_names = {
+            "conflict lead", "contact a", "contact b", "placeholder test contact",
+            "empty run candidate", "date test candidate", "null test", "direct lookup user",
+            "valid contact", "foreign corp executive", "low confidence candidate",
+            "plan test candidate", "test unres slug", "uncertain lead", "unknown profile",
+            "assumptions lead", "competitor contact", "confirmed executive",
+            "confidence test", "compat test candidate", "alice candidate"
+        }
+        if name in dummy_names:
+            return True
+        if c.id.startswith(("test-", "contact-a-", "contact-b-", "contact-other-", "contact-test-", "c-foreign-", "c-err-")):
+            return True
+        return False
 
     # Add Target Prospects
     for t in targets:
+        if is_test_fixture(t):
+            continue
+
+        person_key = (
+            t.full_name.strip().lower() if t.full_name else "",
+            (t.current_company or "").strip().lower()
+        )
+        if person_key[0] and person_key in seen_person_keys:
+            continue
+        if person_key[0]:
+            seen_person_keys.add(person_key)
+
         tid = f"target-{t.id}"
         has_research = (t.id in researched_set)
         if tid not in seen_nodes:
@@ -125,6 +157,18 @@ async def get_network_graph(
 
     # Add Bhanu's Connections
     for bc in bhanu_conns:
+        if is_test_fixture(bc):
+            continue
+
+        person_key = (
+            bc.full_name.strip().lower() if bc.full_name else "",
+            (bc.current_company or "").strip().lower()
+        )
+        if person_key[0] and person_key in seen_person_keys:
+            continue
+        if person_key[0]:
+            seen_person_keys.add(person_key)
+
         bc_id = f"conn-{bc.id}"
         has_research = (bc.id in researched_set)
         if bc_id not in seen_nodes:
