@@ -77,19 +77,21 @@ class SearchDiscoveryAdapter(DiscoveryAdapter):
         clean_name = re.sub(r'\s+', ' ', clean_name)
 
         queries = []
-        # Priority 1: Exact Name + LinkedIn (highest quality hit for professional cards)
-        queries.append(f'"{clean_name}" linkedin')
+        # Priority 1: Exact LinkedIn profile slug match on site:linkedin.com/in/
+        # This is the single highest precision query for Google/Serper to return the EXACT profile card
+        if slug and re.match(r'^[a-zA-Z0-9\-]{3,60}$', slug) and slug.lower() not in ["in", "pub", "profile"]:
+            queries.append(f"site:linkedin.com/in/{slug}")
+            queries.append(f'"{clean_name}" {slug}')
 
         # Priority 2: Exact Name + Company (if company is known)
         if company:
             queries.append(f'"{clean_name}" "{company}"')
 
-        # Priority 3: Unique profile slug (e.g. "dianadedkova" or "naveen-vallabhani")
-        if slug and re.match(r'^[a-zA-Z0-9\-]{3,40}$', slug) and slug.lower() not in ["in", "pub", "profile"]:
-            queries.append(f'"{slug}"')
+        # Priority 3: Exact Name + LinkedIn
+        queries.append(f'"{clean_name}" linkedin')
 
         # Priority 4: Exact Name + professional leadership signals
-        queries.append(f'"{clean_name}" (executive OR director OR officer OR founder OR leader OR engineer)')
+        queries.append(f'"{clean_name}" (executive OR director OR officer OR founder OR leader OR engineer OR "product manager")')
         queries.append(f'"{clean_name}"')
 
         # Deduplicate while preserving order
@@ -134,10 +136,11 @@ class AcademicDiscoveryAdapter(DiscoveryAdapter):
         if not name or name == "Target Contact":
             return []
 
+        query = f'"{name}" "{company}"' if company else name
         return [{
-            "target_url": name,
-            "query": name,
-            "search_terms": [name],
+            "target_url": query,
+            "query": query,
+            "search_terms": [name, company] if company else [name],
             "entity_identifiers": [name]
         }]
 

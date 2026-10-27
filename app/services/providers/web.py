@@ -35,6 +35,36 @@ class GeneralWebProvider(ResearchProvider):
         if any(engine in lower_url for engine in ["bing.com/ck", "bing.com/search", "google.com/url", "google.com/search", "duckduckgo.com/l", "duckduckgo.com/?q"]):
             return {"status": "BLOCKED", "error": "Search engine redirect or query pages cannot be scraped as company websites"}
 
+        # Special handling for LinkedIn profile URLs:
+        # LinkedIn returns HTTP 999 / authwall to direct automated web crawlers.
+        # Fall back directly to Precision Search (Serper Google / Bing) for site:linkedin.com/in/<slug>
+        if "linkedin.com/in/" in lower_url:
+            import re
+            m = re.search(r'linkedin\.com/in/([a-zA-Z0-9_\-]+)', safe_url, re.IGNORECASE)
+            slug = m.group(1).strip() if m else ""
+            if slug:
+                try:
+                    from app.services.providers.search import DuckDuckGoProvider
+                    search_provider = DuckDuckGoProvider()
+                    res = await search_provider.search_person(f"site:linkedin.com/in/{slug}")
+                    if res and res.get("status") == "SUCCESS" and res.get("records_count", 0) > 0:
+                        top_res = (res.get("extracted_data") or {}).get("results", [])
+                        title = top_res[0].get("title", "") if top_res else res.get("title", "")
+                        snippet = top_res[0].get("body", "") if top_res else res.get("meta_description", "")
+                        return {
+                            "status": "SUCCESS",
+                            "final_url": safe_url,
+                            "http_status": 200,
+                            "content_type": "text/markdown",
+                            "title": title,
+                            "meta_description": snippet,
+                            "text_content": f"Title: {title}\nSummary: {snippet}\nProfile URL: {safe_url}\n\n{res.get('text_content', '')}",
+                            "links": [],
+                            "media": []
+                        }
+                except Exception as lk_err:
+                    logger.warning(f"Precision LinkedIn resolution via search failed for {safe_url}: {lk_err}")
+
         timeout = getattr(settings, "WEB_REQUEST_TIMEOUT_SECONDS", 15)
         max_bytes = getattr(settings, "WEB_MAX_RESPONSE_BYTES", 5 * 1024 * 1024)
 

@@ -54,6 +54,21 @@ def canonicalize_linkedin_url(url: str) -> str:
     slug = match.group(1).lower()
     return f"https://www.linkedin.com/in/{slug}"
 
+def extract_linkedin_slug(url_or_slug: Optional[str]) -> Optional[str]:
+    """Extracts lowercase profile slug from a LinkedIn URL or slug string."""
+    if not url_or_slug:
+        return None
+    url_clean = str(url_or_slug).strip().lower()
+    m = re.search(r'linkedin\.com/in/([a-zA-Z0-9_-]+)', url_clean)
+    if m:
+        return m.group(1).rstrip('/')
+    m2 = re.search(r'(?:^|/)in/([a-zA-Z0-9_-]+)', url_clean)
+    if m2:
+        return m2.group(1).rstrip('/')
+    if re.match(r'^[a-zA-Z0-9_-]{3,60}$', url_clean) and url_clean not in ["in", "pub", "profile"]:
+        return url_clean
+    return None
+
 def extract_name_from_linkedin_slug(url_or_slug: str) -> str:
     """Extracts a human-readable candidate name from a LinkedIn URL or slug."""
     if not url_or_slug:
@@ -185,14 +200,19 @@ class IdentityResolver:
                     match_status = "CONFIRMED"
                     match_confidence = 100
                     match_rationale = f"Author '{auth_name}' matches name and affiliated institution"
+                elif target_company:
+                    # Institutional conflict: person belongs to a different known company
+                    match_status = "UNCERTAIN"
+                    match_confidence = 25
+                    match_rationale = f"Author '{auth_name}' affiliated with '{', '.join(insts)}' conflicts with target company '{target_company}'"
                 elif top_author.get("orcid"):
-                    match_status = "PROBABLE"
-                    match_confidence = 80
-                    match_rationale = f"Scholar record with verified ORCID: {top_author.get('orcid')}"
+                    match_status = "UNCERTAIN"
+                    match_confidence = 45
+                    match_rationale = f"Scholar record with ORCID for '{auth_name}', but unanchored to professional company"
                 else:
-                    match_status = "PROBABLE"
-                    match_confidence = 70
-                    match_rationale = f"Publications found for scholar '{auth_name}'"
+                    match_status = "UNCERTAIN"
+                    match_confidence = 35
+                    match_rationale = f"Unanchored scholar name collision for '{auth_name}'"
 
                 claims.append({
                     "claim_type": "ACADEMIC_RECORD",
@@ -212,9 +232,9 @@ class IdentityResolver:
                         "observed_date": pub_date
                     })
             else:
-                match_status = "CONFIRMED"  # Confirmed that no publications exist
-                match_confidence = 90
-                match_rationale = "Scholarly databases searched; no academic record detected"
+                match_status = "SKIPPED"
+                match_confidence = 0
+                match_rationale = "No academic publications found"
 
         elif source_id == "company_web":
             comp_data = extracted
@@ -268,18 +288,35 @@ class IdentityResolver:
             match_rationale = "Public news index and Wikidata entities evaluated"
 
         elif source_id in ["general_web", "duckduckgo", "agent_reach"]:
-            # Check LinkedIn public profile snippet
-            if "linkedin.com/in/" in source_ref or "site:linkedin.com/in/" in source_result.query:
-                match_status = "CONFIRMED"
-                # If target name or tokens match, confidence is 100%
-                if not target_name or tokens_match(target_name, raw_text) or tokens_match(target_name, source_ref) or tokens_match(target_name, source_result.query):
+            target_slug = extract_linkedin_slug(contact.profile_url)
+            cand_slug = extract_linkedin_slug(source_ref) or extract_linkedin_slug(source_result.query)
+
+            # Strict guard against LinkedIn profile slug collision / homonyms:
+            if target_slug and cand_slug and target_slug != cand_slug:
+                match_status = "UNCERTAIN"
+                match_confidence = 10
+                match_rationale = f"Disqualified: candidate LinkedIn slug '{cand_slug}' conflicts with target profile slug '{target_slug}'"
+            elif "linkedin.com/in/" in source_ref or "site:linkedin.com/in/" in source_result.query:
+                if target_slug and cand_slug and target_slug == cand_slug:
+                    match_status = "CONFIRMED"
                     match_confidence = 100
+                    match_rationale = f"Direct verified LinkedIn profile match (slug: {target_slug})"
+                elif not target_slug:
+                    if target_name and tokens_match(target_name, raw_text):
+                        match_status = "PROBABLE"
+                        match_confidence = 75
+                        match_rationale = "Public LinkedIn profile name match without anchor slug verification"
+                    else:
+                        match_status = "UNCERTAIN"
+                        match_confidence = 30
+                        match_rationale = "Unverified LinkedIn profile reference"
                 else:
-                    match_confidence = 95
-                match_rationale = "Direct public LinkedIn profile and verified career credentials"
+                    match_status = "UNCERTAIN"
+                    match_confidence = 30
+                    match_rationale = "LinkedIn mention without matching profile slug"
             else:
                 match_status = "PROBABLE"
-                match_confidence = 75
+                match_confidence = 70
                 match_rationale = "Web search indexing for executive profile"
 
             meta_desc = extracted.get("meta_description") or ""

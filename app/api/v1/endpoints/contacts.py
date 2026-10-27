@@ -464,29 +464,29 @@ async def get_contact_360_data(
         "identityGatePassed": not is_identity_uncertain,
         "identityConfidence": identity_confidence,
         "identityGateReason": identity_gate_reason,
-        "businessProblem": (opp_validation.get("business_problem") if opp_validation
+        "businessProblem": ((opp_validation.get("business_problem") or opp_validation.get("businessProblem")) if opp_validation and (opp_validation.get("business_problem") or opp_validation.get("businessProblem"))
                             else snapshot.get("smallest_solvable_problem") or snapshot.get("broad_business_problem") or "Unspecified"),
-        "capabilityMatch": (opp_validation.get("capability_match") if opp_validation
+        "capabilityMatch": ((opp_validation.get("capability_match") or opp_validation.get("capabilityMatch")) if opp_validation and (opp_validation.get("capability_match") or opp_validation.get("capabilityMatch"))
                             else snapshot.get("ottobon_capability_match") or "Unspecified"),
-        "supportingEvidenceIds": opp_validation.get("supporting_evidence_ids") if opp_validation else [e.id for e in contact_evidences],
-        "assumptions": opp_validation.get("assumptions") if opp_validation else [
+        "supportingEvidenceIds": ((opp_validation.get("supporting_evidence_ids") or opp_validation.get("supportingEvidenceIds")) if opp_validation and (opp_validation.get("supporting_evidence_ids") or opp_validation.get("supportingEvidenceIds")) else [e.id for e in contact_evidences]),
+        "assumptions": (opp_validation.get("assumptions") if opp_validation and opp_validation.get("assumptions") else [
             snapshot.get("cost_pricing_estimate", "Indicative pricing assumption pending client confirmation"),
             snapshot.get("estimated_effort_hours", "Effort assumption pending sprint scoping"),
             "Enterprise rate cards and customer budget authority are unconfirmed hypotheses"
-        ],
-        "missingInformation": opp_validation.get("missing_information") if opp_validation else [
+        ]),
+        "missingInformation": ((opp_validation.get("missing_information") or opp_validation.get("missingInformation")) if opp_validation and (opp_validation.get("missing_information") or opp_validation.get("missingInformation")) else [
             "Customer budget authority not verified",
             "Buyer decision-making authority not confirmed",
             "Internal rate card not finalized in registry"
-        ],
-        "observedFacts": opp_validation.get("observed_facts") if opp_validation else [
+        ]),
+        "observedFacts": ((opp_validation.get("observed_facts") or opp_validation.get("observedFacts")) if opp_validation and (opp_validation.get("observed_facts") or opp_validation.get("observedFacts")) else [
             f"Observed Role: {snapshot.get('current_role', contact.current_title or 'Unknown')}",
             f"Observed Organization: {snapshot.get('current_organization', contact.current_company or 'Unknown')}"
-        ],
-        "inferredPainPoints": opp_validation.get("inferred_pain_points") if opp_validation else [
+        ]),
+        "inferredPainPoints": ((opp_validation.get("inferred_pain_points") or opp_validation.get("inferredPainPoints")) if opp_validation and (opp_validation.get("inferred_pain_points") or opp_validation.get("inferredPainPoints")) else [
             snapshot.get("broad_business_problem", "Hypothesized operational pain point"),
             snapshot.get("smallest_solvable_problem", "Hypothesized solution angle")
-        ]
+        ])
     }
 
     # -------------------------------------------------------------------------
@@ -594,6 +594,90 @@ async def get_contact_360_data(
 
     identity_res_status = snapshot.get("identity_resolution_status", "CONFIRMED" if not is_identity_uncertain else "AMBIGUOUS")
 
+    # -------------------------------------------------------------------------
+    # IDENTITY AUDIT & OBSERVABILITY ENGINE
+    # -------------------------------------------------------------------------
+    provider_diagnostics = []
+    for rid in run_ids:
+        task_stmt = select(ResearchTask).where(ResearchTask.research_run_id == rid).order_by(ResearchTask.started_at.asc())
+        r_tasks = (await db.execute(task_stmt)).scalars().all()
+        for t in r_tasks:
+            t_meta = t.target_metadata or {}
+            target_q = t_meta.get("query") or t_meta.get("url") or (t.target_metadata if isinstance(t.target_metadata, str) else "")
+            
+            diag_status = t.status.value if hasattr(t.status, "value") else str(t.status)
+            diag_message = t.error_message
+            if t.error_message and "999" in t.error_message:
+                diag_message = "LinkedIn Bot Challenge (HTTP 999): Crawler blocked by anti-bot perimeter defense. Secondary profile anchors utilized."
+            elif not diag_message and diag_status == "COMPLETED":
+                diag_message = "Query executed successfully against provider index."
+
+            provider_diagnostics.append({
+                "taskId": t.id,
+                "sourceId": t.source_id,
+                "status": diag_status,
+                "query": target_q,
+                "errorMessage": diag_message,
+                "startedAt": t.started_at.isoformat() if t.started_at else None,
+                "completedAt": t.completed_at.isoformat() if t.completed_at else None
+            })
+
+    # Deterministic Scoring Factor Breakdown
+    has_slug_match = bool(contact.profile_url and "linkedin.com/in/" in contact.profile_url)
+    has_valid_company = bool(contact.current_company and contact.current_company.lower() not in ["pending research", "unknown", "none", "", "unverified", "company unverified"])
+    has_valid_title = bool(contact.current_title and contact.current_title.lower() not in ["analyzing profile...", "pending research", "unknown", "none", "", "professional"])
+    has_network_link = bool(contact.contact_type == "BHANU_CONNECTION" or "mutual_connection" in snapshot or "bhanu" in str(snapshot).lower() or identity_confidence >= 90)
+    
+    score_factors = [
+        {
+            "name": "LinkedIn URL & Profile Slug Anchor",
+            "weight": 40,
+            "earned": 40 if has_slug_match else (20 if contact.profile_url else 0),
+            "status": "MATCHED" if has_slug_match else ("MISSING" if not contact.profile_url else "PARTIAL"),
+            "description": f"Verified profile slug '{contact.profile_url.split('/in/')[-1].split('/')[0] if has_slug_match else 'None'}'" if has_slug_match else "Profile URL missing or unverified."
+        },
+        {
+            "name": "Current Employer & Organization Verification",
+            "weight": 30,
+            "earned": 30 if has_valid_company else 0,
+            "status": "MATCHED" if has_valid_company else "UNVERIFIED",
+            "description": f"Verified active organization: '{contact.current_company}'" if has_valid_company else "Company name unverified or pending research."
+        },
+        {
+            "name": "Role & Executive Title Alignment",
+            "weight": 20,
+            "earned": 20 if has_valid_title else 5,
+            "status": "MATCHED" if has_valid_title else "PARTIAL",
+            "description": f"Verified job title: '{contact.current_title}'" if has_valid_title else "Title unconfirmed or generic placeholder."
+        },
+        {
+            "name": "Network Provenance & Mutual Connections",
+            "weight": 10,
+            "earned": 10 if has_network_link else 5,
+            "status": "MATCHED" if has_network_link else "NEUTRAL",
+            "description": "Direct connection or mutual network path confirmed." if has_network_link else "Independent contact record."
+        }
+    ]
+
+    calculated_score = sum(f["earned"] for f in score_factors)
+    if identity_confidence > 0:
+        final_confidence = max(identity_confidence, calculated_score)
+    else:
+        final_confidence = calculated_score
+
+    identity_audit = {
+        "score": final_confidence,
+        "status": identity_res_status,
+        "isGatePassed": not is_identity_uncertain,
+        "gateReason": identity_gate_reason,
+        "factors": score_factors,
+        "providerDiagnostics": provider_diagnostics,
+        "detectedConflicts": snapshot.get("detected_conflicts", []),
+        "quarantinedCount": len(conflicts_quarantined_list),
+        "auditIssues": snapshot.get("audit_issues", []),
+        "resolutionNotes": snapshot.get("resolution_notes") or f"Identity evaluated across {len(provider_diagnostics)} provider queries and verified profile anchors."
+    }
+
     return {
         "id": contact.id,
         "name": contact.full_name or snapshot.get("name", "Unknown"),
@@ -603,6 +687,7 @@ async def get_contact_360_data(
         "founder_reviewed": bool(contact.founder_reviewed),
         "card_status": contact.card_status,
         "contact_type": contact.contact_type,
+        "identityAudit": identity_audit,
         "linkedinUrl": contact.profile_url or snapshot.get("profile_url", ""),
         "tier": snapshot.get("networkos_tier", "Tier 3"),
         "personIntelligence": {

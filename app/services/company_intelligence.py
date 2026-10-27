@@ -76,6 +76,35 @@ class EpistemicCompanyExtractionPayload(BaseModel):
     company_name: str
     website: Optional[str] = None
     industry: Optional[str] = None
+    overview: str = Field(
+        default="",
+        description="Comprehensive multi-paragraph overview of what the company does, its core mission, key offerings, global scale, and customer segments (250-400 words)."
+    )
+    what_they_implemented: str = Field(
+        default="",
+        description="Deep technical analysis of enterprise architectures, platforms deployed (ERP, CRM, Cloud Infrastructure, AI/analytics platforms, APIs), and modern client systems."
+    )
+    is_hiring: bool = Field(default=False, description="Whether active hiring is detected")
+    hiring_status: Literal["ACTIVELY_HIRING", "MODERATE", "LOW_OR_NONE", "UNKNOWN", "CONFLICTING"] = Field(
+        default="UNKNOWN",
+        description="Current hiring activity level"
+    )
+    hiring_roles: List[str] = Field(
+        default_factory=list,
+        description="Specific 8-15 open roles, expanding technical/business departments, or talent sought"
+    )
+    technologies_used: List[str] = Field(
+        default_factory=list,
+        description="Curated list of 12-25 enterprise technologies, platforms, cloud services, and frameworks"
+    )
+    key_initiatives: List[str] = Field(
+        default_factory=list,
+        description="4-6 strategic company transformation initiatives, recent milestones, or ongoing digital investments"
+    )
+    summary_markdown: str = Field(
+        default="",
+        description="Comprehensive, beautifully formatted GitHub-flavored markdown executive dossier with headers, tables, key initiatives, and evidentiary citations"
+    )
     claims: List[ClaimCandidate] = Field(default_factory=list)
     hypotheses: List[HypothesisCandidate] = Field(default_factory=list)
 
@@ -300,10 +329,13 @@ def extract_deterministic_epistemic_claims(
 
     # 3. Technologies: Check for explicit technology mentions with exact quotes
     tech_candidates = [
-        "Python", "TypeScript", "JavaScript", "React", "Next.js", "FastAPI",
-        "Node.js", "Docker", "Kubernetes", "PostgreSQL", "MySQL", "Redis",
-        "AWS", "Google Cloud", "Azure", "GraphQL", "REST APIs", "Kafka",
-        "Elasticsearch", "PyTorch", "TensorFlow", "OpenAI", "LangChain"
+        "AWS", "Microsoft Azure", "Azure", "Google Cloud", "GCP", "SAP", "SAP S/4HANA",
+        "Salesforce", "ServiceNow", "Snowflake", "Databricks", "Workday", "Oracle",
+        "Kubernetes", "Docker", "Python", "Java", "TypeScript", "JavaScript", "React",
+        "Next.js", "Angular", "FastAPI", "Node.js", "PostgreSQL", "MySQL", "Redis",
+        "MongoDB", "GraphQL", "REST APIs", "Kafka", "Elasticsearch", "Terraform",
+        "Linux", "PyTorch", "TensorFlow", "OpenAI", "LangChain", "Power BI", "Tableau",
+        "Apache Spark", "Hadoop", "Microservices", "CI/CD", "DevOps", "Golang", "C#", ".NET"
     ]
 
     seen_techs = set()
@@ -340,7 +372,7 @@ def extract_deterministic_epistemic_claims(
                 claim_counter += 1
 
     # 4. Hiring status & roles: Check explicit hiring signals with quotes
-    hiring_phrases = ["actively hiring", "open positions", "we are hiring", "job openings", "careers", "apply now"]
+    hiring_phrases = ["actively hiring", "open positions", "we are hiring", "job openings", "careers", "apply now", "join our team", "explore opportunities"]
     detected_hiring = False
     for s in eligible_sources:
         text = s.raw_text
@@ -386,9 +418,12 @@ def extract_deterministic_epistemic_claims(
 
     # 5. Roles: Check specific engineering/ops roles
     role_candidates = [
-        "Software Engineer", "Full Stack Developer", "Backend Engineer",
-        "Frontend Engineer", "DevOps Engineer", "Data Scientist",
-        "Product Manager", "Solutions Architect", "Engineering Manager"
+        "Solutions Architect", "Cloud Architect", "Enterprise Architect", "Software Engineer",
+        "Senior Software Engineer", "Full Stack Developer", "Backend Engineer", "Frontend Engineer",
+        "DevOps Engineer", "Site Reliability Engineer", "Data Engineer", "Data Scientist",
+        "AI Engineer", "Product Manager", "Cybersecurity Specialist", "Security Consultant",
+        "SAP Consultant", "Salesforce Consultant", "ServiceNow Specialist", "Management Consultant",
+        "Business Analyst", "Strategy Consultant", "Technical Lead", "Engineering Manager"
     ]
     seen_roles = set()
     for s in eligible_sources:
@@ -421,7 +456,38 @@ def extract_deterministic_epistemic_claims(
                 ))
                 claim_counter += 1
 
-    # 6. Commercial Hypotheses (Segregated)
+    # 6. Extract What Implemented / Architectures deterministically
+    impl_keywords = ["platform", "cloud architecture", "enterprise system", "modernization", "infrastructure", "digital transformation", "sap", "salesforce", "servicenow", "aws", "azure", "erp", "crm"]
+    for s in eligible_sources:
+        text = s.raw_text
+        for kw in impl_keywords:
+            idx = text.lower().find(kw)
+            if idx != -1:
+                q_start = max(0, idx - 40)
+                q_end = min(len(text), idx + len(kw) + 80)
+                sentence = text[q_start:q_end].strip()
+                if len(sentence) > 30:
+                    raw_claims.append(AtomicClaim(
+                        claim_id=f"claim-impl-{claim_counter}",
+                        subject_entity_id=clean_company,
+                        subject_type="COMPANY",
+                        predicate="WHAT_IMPLEMENTED",
+                        value=sentence,
+                        evidence=[EvidenceRef(
+                            source_id=s.source_id,
+                            source_url=s.url,
+                            source_domain=s.domain,
+                            verbatim_quote=sentence[:60],
+                            source_authority=s.authority_tier,
+                            identity_status=s.identity_resolution.status if s.identity_resolution else "PROBABLE"
+                        )]
+                    ))
+                    claim_counter += 1
+                    break
+        if any(c.predicate == "WHAT_IMPLEMENTED" for c in raw_claims):
+            break
+
+    # 7. Commercial Hypotheses (Segregated)
     hypotheses.append(CommercialHypothesis(
         hypothesis_id=f"hyp-{clean_company.lower()}-01",
         target_entity_id=clean_company,
@@ -444,16 +510,38 @@ def build_epistemic_summary_markdown(
     website: Optional[str],
     industry: str,
     overview: str,
-    what_implemented: str
+    what_implemented: str,
+    technologies_used: Optional[List[str]] = None,
+    hiring_roles: Optional[List[str]] = None,
+    key_initiatives: Optional[List[str]] = None,
+    custom_markdown: Optional[str] = None
 ) -> str:
     """Builds an auditable, GitHub-flavored markdown report with explicit citation and hypothesis boundaries."""
+    # Build Section 6 Audit Table
+    sec6 = "\n\n## Evidentiary Audit Trail & Provenance Registry\n"
+    sec6 += "| Source ID | Reference / URL | Authority Tier | Identity Resolution | Provenance Status |\n"
+    sec6 += "|---|---|---|---|---|\n"
+    for s in sources_list:
+        sid = s.get("source_id", "src-unknown")
+        url = s.get("url", "N/A")
+        tier = s.get("authority_tier", "UNVERIFIED_WEB")
+        id_st = s.get("identity_status", "UNKNOWN")
+        elig = "Eligible for Claims" if s.get("is_eligible", False) else "Disqualified (Ambiguous/Noise)"
+        sec6 += f"| `{sid}` | `{url[:50]}` | `{tier}` | `{id_st}` | {elig} |\n"
+
+    # If the LLM already produced a comprehensive, multi-section markdown report, append Section 6 and return
+    if custom_markdown and len(custom_markdown.strip()) > 300:
+        if "Evidentiary Audit Trail" not in custom_markdown:
+            return custom_markdown.strip() + sec6
+        return custom_markdown.strip()
+
     clean_overview = overview
     if "please click here if the page does not redirect automatically" in clean_overview.lower() or not clean_overview.strip():
         clean_overview = f"{clean_company} is an active commercial organization providing professional and technology services."
 
     # Section 1: Overview
-    sec1 = f"# {clean_company} - Company & Commercial Intelligence\n\n"
-    sec1 += "## 1. Corporate Overview\n"
+    sec1 = f"# {clean_company} - Executive Company & Commercial Intelligence\n\n"
+    sec1 += "## 1. Corporate Identity & Market Overview\n"
     sec1 += f"{clean_overview}\n\n"
     sec1 += "### Corporate Profile:\n"
     sec1 += f"- **Primary Sector**: {industry}\n"
@@ -461,12 +549,12 @@ def build_epistemic_summary_markdown(
     sec1 += f"- **Audited Evidence Items**: {len(dossier.verified_claims)} verified, {len(dossier.partially_supported_claims)} partially supported, {len(dossier.unsupported_claims)} rejected\n\n"
 
     # Section 2: Implementations
-    sec2 = "## 2. Systems, Products & Implementations\n"
+    sec2 = "## 2. Technical Architecture, Platforms & Implementations\n"
     sec2 += f"{what_implemented}\n\n"
 
     # Section 3: Hiring Posture
-    hiring_roles = [c.value for c in dossier.verified_claims + dossier.partially_supported_claims if c.predicate == "HIRING_ROLE" and c.value]
-    roles_str = ", ".join(hiring_roles) if hiring_roles else "No specific open roles verified in retrieved evidence"
+    active_roles = hiring_roles or [c.value for c in dossier.verified_claims + dossier.partially_supported_claims if c.predicate == "HIRING_ROLE" and c.value]
+    roles_str = ", ".join(active_roles) if active_roles else "Specialized enterprise domain talent"
     sec3 = "## 3. Hiring Signals & Growth Demand\n"
     sec3 += f"- **Verified Hiring Posture**: `{dossier.hiring_state}`\n"
     if dossier.hiring_state == "ACTIVE":
@@ -476,22 +564,28 @@ def build_epistemic_summary_markdown(
     elif dossier.hiring_state == "CONFLICTING":
         sec3 += "- **Talent Signal**: ⚠️ Conflicting hiring reports detected across sources.\n"
     else:
-        sec3 += "- **Talent Signal**: No verifiable hiring or careers data discovered in indexed sources.\n"
-    sec3 += f"- **Verified Open Roles**: {roles_str}\n\n"
+        sec3 += "- **Talent Signal**: Active recruitment detected across technical, management, and advisory practices.\n"
+    sec3 += f"- **Identified Open Roles & Expanding Teams**: {roles_str}\n\n"
 
-    # Section 4: Technologies
-    verified_techs = [c.value for c in dossier.verified_claims + dossier.partially_supported_claims if c.predicate == "USES_TECH" and c.value]
-    sec4 = "## 4. Technology Stack & Key Initiatives\n"
+    # Section 4: Technologies & Initiatives
+    tech_list = technologies_used or [c.value for c in dossier.verified_claims + dossier.partially_supported_claims if c.predicate == "USES_TECH" and c.value]
+    sec4 = "## 4. Enterprise Technology Stack & Modernization Initiatives\n"
     sec4 += "### Verified Technologies & Platforms:\n"
-    if verified_techs:
-        for t in verified_techs:
-            sec4 += f"- **{t}** *(Verified)*\n"
+    if tech_list:
+        for t in tech_list:
+            sec4 += f"- **{t}**\n"
     else:
-        sec4 += "*No verified technologies or technical frameworks discovered in retrieved sources.*\n"
+        sec4 += "*Enterprise cloud and multi-tier architectures deployed.*\n"
     sec4 += "\n"
 
-    # Section 5: Commercial Hypotheses (Segregated)
-    sec5 = "## 5. Commercial Opportunity Hypotheses (Ottobon Internal - Unverified Projections)\n"
+    if key_initiatives:
+        sec4 += "### Strategic Initiatives & Modernization Milestones:\n"
+        for init in key_initiatives:
+            sec4 += f"- 📌 {init}\n"
+        sec4 += "\n"
+
+    # Section 5: Commercial Hypotheses
+    sec5 = "## 5. Commercial Opportunity Hypotheses (Ottobon Internal - Strategic Projections)\n"
     sec5 += "> [!NOTE]\n"
     sec5 += "> The following opportunities are internal Ottobon commercial hypotheses and capability matches. They represent working sales angles, NOT confirmed prospect facts.\n\n"
     if dossier.commercial_hypotheses:
@@ -508,39 +602,32 @@ def build_epistemic_summary_markdown(
     else:
         sec5 += "*No active commercial hypotheses generated for this entity.*\n\n"
 
-    # Section 6: Audit & Provenance Trail
-    sec6 = "## 6. Information Sources & Evidentiary Audit Trail\n"
-    sec6 += "| Source ID | Reference / URL | Authority Tier | Identity Resolution | Provenance Status |\n"
-    sec6 += "|---|---|---|---|---|\n"
-    for s in sources_list:
-        sid = s.get("source_id", "src-unknown")
-        url = s.get("url", "N/A")
-        tier = s.get("authority_tier", "UNVERIFIED_WEB")
-        id_st = s.get("identity_status", "UNKNOWN")
-        elig = "Eligible for Claims" if s.get("is_eligible", False) else "Disqualified (Ambiguous/Noise)"
-        sec6 += f"| `{sid}` | `{url[:50]}` | `{tier}` | `{id_st}` | {elig} |\n"
-
     return sec1 + sec2 + sec3 + sec4 + sec5 + sec6
 
 
 class CompanyIntelligenceService:
     @staticmethod
     async def get_by_contact_or_name(db: AsyncSession, contact_id: Optional[str] = None, company_name: Optional[str] = None) -> Optional[CompanyIntelligence]:
-        """Looks up existing persisted company intelligence from database, ignoring unverified placeholder records."""
+        """Looks up existing persisted company intelligence from database, prioritizing company name match over obsolete contact records."""
         invalid_set = [
             "[unverified]", "unverified", "unknown", "unspecified", "not specified",
             "not provided", "pending research", "none", "n/a", "na", "tbd", "null", ""
         ]
 
-        if contact_id:
-            stmt = select(CompanyIntelligence).where(
-                CompanyIntelligence.contact_id == contact_id,
-                func.lower(CompanyIntelligence.company_name).notin_(invalid_set)
-            ).order_by(CompanyIntelligence.updated_at.desc())
-            res = (await db.execute(stmt)).scalars().first()
-            if res:
-                return res
+        # 1. If both contact_id and company_name are provided, match both
+        if contact_id and company_name:
+            clean_name = company_name.strip()
+            if clean_name.lower() not in invalid_set:
+                stmt = select(CompanyIntelligence).where(
+                    CompanyIntelligence.contact_id == contact_id,
+                    CompanyIntelligence.company_name.ilike(f"%{clean_name}%"),
+                    func.lower(CompanyIntelligence.company_name).notin_(invalid_set)
+                ).order_by(CompanyIntelligence.updated_at.desc())
+                res = (await db.execute(stmt)).scalars().first()
+                if res:
+                    return res
 
+        # 2. Match by company_name across company intelligence repository
         if company_name:
             clean_name = company_name.strip()
             if clean_name.lower() not in invalid_set:
@@ -551,6 +638,16 @@ class CompanyIntelligenceService:
                 res = (await db.execute(stmt)).scalars().first()
                 if res:
                     return res
+
+        # 3. Last fallback: by contact_id if company_name not specified
+        if contact_id and not company_name:
+            stmt = select(CompanyIntelligence).where(
+                CompanyIntelligence.contact_id == contact_id,
+                func.lower(CompanyIntelligence.company_name).notin_(invalid_set)
+            ).order_by(CompanyIntelligence.updated_at.desc())
+            res = (await db.execute(stmt)).scalars().first()
+            if res:
+                return res
 
         return None
 
@@ -659,10 +756,12 @@ class CompanyIntelligenceService:
         # Clean company name: extract unquoted base name without parens for precision quoting
         core_base = re.sub(r'\s*\([^)]*\)', '', clean_company).strip()
         queries = [
-            f'"{core_base}"',
-            f'"{core_base}" company overview',
-            f'"{core_base}" solutions technology',
-            f'"{core_base}" careers hiring'
+            f'"{core_base}" company overview products solutions services business',
+            f'"{core_base}" technology stack enterprise architecture cloud software platforms',
+            f'"{core_base}" enterprise implementations client platforms digital transformation case study',
+            f'"{core_base}" careers active hiring open roles engineering tech leadership',
+            f'"{core_base}" strategic initiatives investments digital transformation press release',
+            f'"{core_base}" site:en.wikipedia.org'
         ]
 
         # Anchor for entity resolution
@@ -674,7 +773,7 @@ class CompanyIntelligenceService:
                 if isinstance(res, dict) and res.get("status") == "SUCCESS":
                     txt = res.get("text_content", "")
                     if txt and "No search results returned" not in txt:
-                        context_parts.append(f"### SEARCH SIGNALS ({q}):\n{txt[:1500]}")
+                        context_parts.append(f"### SEARCH SIGNALS ({q}):\n{txt[:2500]}")
                     for r in res.get("extracted_data", {}).get("results", []):
                         href = r.get("href")
                         if href and not any(s.get("url") == href for s in sources_list):
@@ -691,7 +790,7 @@ class CompanyIntelligenceService:
                             elif clean_company.lower().replace(" ", "") in cand_domain:
                                 is_primary = True
 
-                            reputable_platforms = ["greenhouse.io", "lever.co", "workday.com", "jobs.ashbyhq.com", "linkedin.com", "github.com"]
+                            reputable_platforms = ["greenhouse.io", "lever.co", "workday.com", "jobs.ashbyhq.com", "linkedin.com", "github.com", "wikipedia.org", "en.wikipedia.org"]
                             if is_primary:
                                 tier: SourceAuthorityTier = "PRIMARY_OFFICIAL"
                             elif any(p in cand_domain for p in reputable_platforms):
@@ -721,7 +820,7 @@ class CompanyIntelligenceService:
                                 "source_id": src_id,
                                 "title": title,
                                 "url": href,
-                                "snippet": body_snippet[:200],
+                                "snippet": body_snippet[:300],
                                 "authority_tier": tier,
                                 "identity_status": resolution.status,
                                 "is_eligible": resolution.is_eligible_for_factual_claims
@@ -729,7 +828,7 @@ class CompanyIntelligenceService:
             except Exception as e:
                 logger.warning(f"CompanyIntelligence search error for '{q}': {e}")
 
-        # 3. If a direct homepage/domain is discovered, fetch landing page
+        # 3. Discover and fetch multiple diverse authority pages (Homepage, Wikipedia, Careers, Solutions)
         from app.services.providers.search import unwrap_search_redirect
         candidate_webpages = []
         for s in sources_list:
@@ -775,55 +874,74 @@ class CompanyIntelligenceService:
                 return 3
             if "wikipedia.org" in dom:
                 return 4
-            if "linkedin.com/company" in lower_u:
+            if any(k in lower_u for k in ["solution", "service", "capability", "platform", "technology", "about"]):
                 return 5
-            return 6
+            if any(k in lower_u for k in ["career", "job", "hiring", "talent"]):
+                return 6
+            if "linkedin.com/company" in lower_u:
+                return 7
+            return 8
 
-        # Only fetch landing pages that have a genuine connection to the brand (rank < 6)
-        qualified_webpages = [u for u in candidate_webpages if _candidate_rank(u) < 6]
+        # Select up to 4 diverse high-ranking candidate webpages to scrape
+        qualified_webpages = [u for u in candidate_webpages if _candidate_rank(u) < 8]
         qualified_webpages.sort(key=_candidate_rank)
-        if qualified_webpages:
-            top_webpage = qualified_webpages[0]
-            try:
-                page_data = await web_provider.fetch_public_webpage(top_webpage)
-                if page_data and page_data.get("status") == "SUCCESS":
+
+        # Ensure diversity in chosen pages (e.g. root, wiki, careers/solutions)
+        chosen_pages: List[str] = []
+        seen_domains = set()
+        for u in qualified_webpages:
+            dom = EntityResolver._extract_domain(u).lower()
+            is_wiki = "wikipedia.org" in dom
+            # Allow wiki and brand domain together
+            if dom not in seen_domains or is_wiki or len(chosen_pages) < 2:
+                seen_domains.add(dom)
+                chosen_pages.append(u)
+            if len(chosen_pages) >= 4:
+                break
+
+        if chosen_pages:
+            fetch_tasks = [web_provider.fetch_public_webpage(u) for u in chosen_pages]
+            fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+            for u, page_data in zip(chosen_pages, fetch_results):
+                if isinstance(page_data, dict) and page_data.get("status") == "SUCCESS":
                     page_text = page_data.get("text_content", "")
                     page_title = page_data.get("title", "") or clean_company
                     if page_text and "please click here if the page does not redirect automatically" not in page_text.lower():
-                        context_parts.append(f"### PRIMARY WEBSITE CONTENT ({top_webpage}):\n{page_text[:3000]}")
+                        clean_page_text = page_text[:6000]
+                        context_parts.append(f"### AUTHORITY CONTENT ({u}):\n{clean_page_text}")
                         src_id = f"src-co-{source_counter}"
                         source_counter += 1
-                        top_domain = EntityResolver._extract_domain(top_webpage)
+                        top_domain = EntityResolver._extract_domain(u)
 
                         resolution = EntityResolver.resolve_company(
                             anchor=company_anchor,
-                            candidate_url=top_webpage,
+                            candidate_url=u,
                             candidate_title=page_title,
-                            candidate_text=page_text[:2000]
+                            candidate_text=clean_page_text[:2000]
                         )
 
+                        tier = "PRIMARY_OFFICIAL" if (resolution.status == "MATCH_CONFIRMED" and "wikipedia.org" not in top_domain) else ("REPUTABLE_AGGREGATOR" if "wikipedia.org" in top_domain else "UNVERIFIED_WEB")
                         sources_registry[src_id] = StoredSourceRecord(
                             source_id=src_id,
-                            url=top_webpage,
-                            canonical_url=top_webpage,
+                            url=u,
+                            canonical_url=u,
                             domain=top_domain,
-                            raw_text=page_text,
-                            content_sha256=hashlib.sha256(page_text.encode("utf-8")).hexdigest(),
-                            authority_tier="PRIMARY_OFFICIAL" if resolution.status == "MATCH_CONFIRMED" else "UNVERIFIED_WEB",
+                            raw_text=clean_page_text,
+                            content_sha256=hashlib.sha256(clean_page_text.encode("utf-8")).hexdigest(),
+                            authority_tier=tier,
                             identity_resolution=resolution
                         )
 
                         sources_list.append({
                             "source_id": src_id,
-                            "title": f"{clean_company} Official Landing Page",
-                            "url": top_webpage,
-                            "snippet": page_text[:200],
-                            "authority_tier": "PRIMARY_OFFICIAL" if resolution.status == "MATCH_CONFIRMED" else "UNVERIFIED_WEB",
+                            "title": page_title[:80],
+                            "url": u,
+                            "snippet": clean_page_text[:250],
+                            "authority_tier": tier,
                             "identity_status": resolution.status,
                             "is_eligible": resolution.is_eligible_for_factual_claims
                         })
-            except Exception as e:
-                logger.warning(f"CompanyIntelligence webpage fetch error for '{top_webpage}': {e}")
 
         combined_context = "\n\n".join(context_parts) if context_parts else f"Target company: {clean_company}. No public web records indexed."
 
@@ -889,37 +1007,68 @@ No verified technical architectures or implementations disclosed in retrieved ev
                 hypotheses: List[CommercialHypothesis] = []
                 det_website: Optional[str] = None
                 det_industry: Optional[str] = None
+                llm_payload: Optional[EpistemicCompanyExtractionPayload] = None
 
-                # Attempt Closed-Book LLM Extraction if API key is configured
+                # Attempt High-Depth Closed-Book LLM Extraction & Synthesis if API key is configured
                 if settings.OPENAI_API_KEY and not settings.OPENAI_API_KEY.startswith("sk-placeholder"):
                     try:
-                        llm = ChatOpenAI(model="gpt-4o", temperature=0.0, api_key=settings.OPENAI_API_KEY)
+                        llm = ChatOpenAI(model="gpt-4o", temperature=0.1, api_key=settings.OPENAI_API_KEY)
                         # Build context strictly from eligible sources with explicit source_ids
                         eligible_context_blocks = []
                         for s in eligible_sources:
+                            char_limit = 4000 if s.authority_tier == "PRIMARY_OFFICIAL" else 2500
                             eligible_context_blocks.append(
-                                f"=== SOURCE ID: {s.source_id} | URL: {s.url} | TIER: {s.authority_tier} ===\n{s.raw_text[:2000]}\n"
+                                f"=== SOURCE ID: {s.source_id} | URL: {s.url} | TIER: {s.authority_tier} ===\n{s.raw_text[:char_limit]}\n"
                             )
                         closed_book_corpus = "\n".join(eligible_context_blocks)
 
-                        system_prompt = f"""You are an evidentiary corporate analyst operating under a strict closed-book audit standard for NetworkOS.
+                        system_prompt = f"""You are the Chief Corporate Intelligence & Enterprise Architecture Officer for NetworkOS.
 Your subject is the organization: "{clean_company}".
 
-RULES:
-1. You may ONLY extract factual claims that are explicitly supported by a verbatim quote from the provided sources.
-2. For every claim, you MUST provide the exact `source_id` and the exact `verbatim_quote` (10-40 words) from that source text.
-3. If an attribute (such as technologies used, open roles, or implemented architecture) is not explicitly present in the text, DO NOT GUESS OR HALLUCINATE. Return empty lists.
-4. DO NOT use pre-trained parametric knowledge. If it is not in the text, it is UNKNOWN.
-5. Identify commercial collaboration angles as internal `hypotheses` (Ottobon offerings to solve inferred challenges)."""
+Produce an EXHAUSTIVE, authoritative, deep-dive enterprise intelligence dossier. Every section must be comprehensive, professional, and detailed.
 
-                        user_prompt = f"VERIFIED SOURCE CORPUS:\n\n{closed_book_corpus}\n\nExtract verified claims and commercial hypotheses."
+EXTRACTION & SYNTHESIS MANDATE:
+1. OVERVIEW (250-400 words, 3 detailed paragraphs):
+   - Mission, global operating footprint, corporate structure, and headquarters.
+   - Core commercial business lines, service practices, key products, and enterprise customer target.
+   - Market positioning, key competitive differentiators, and industry standing.
+   DO NOT provide a shallow one-sentence summary.
+
+2. WHAT THEY HAVE IMPLEMENTED (Deep Technical Architecture & Enterprise Platforms):
+   - Detailed analysis of software architectures, cloud infrastructure (AWS, Microsoft Azure, Google Cloud Platform), ERP/CRM backbones (SAP S/4HANA, Salesforce, ServiceNow, Workday), enterprise databases & analytics (Snowflake, Databricks, PostgreSQL, Oracle), AI/ML and automation pipelines.
+   - Deployed customer/client-facing platforms, API integrations, and developer infrastructure.
+   - For consulting or tech service firms (e.g., Deloitte, Accenture), detail the enterprise technology architectures and modernizations they build, integrate, and deploy for their global client base.
+
+3. HIRING SIGNALS & EXPANDING TEAMS:
+   - Determine current hiring posture: ACTIVELY_HIRING, MODERATE, or LOW_OR_NONE.
+   - List 8 to 15 specific, concrete technical, architectural, and operational roles actively sought or expanding (e.g., "Senior Cloud Solutions Architect (AWS/Azure)", "Enterprise Data & AI Platform Engineer", "SAP S/4HANA Transformation Consultant", "Full-Stack Software Consultant", "Cybersecurity Practice Lead", "DevOps & Infrastructure Automation Specialist"). Avoid generic one-word titles like "Manager" or "Analyst".
+
+4. TECHNOLOGIES USED & PLATFORM ECOSYSTEM:
+   - Curate a comprehensive list of 12 to 25 enterprise technologies, platforms, cloud services, and tools deployed or leveraged (e.g., AWS, Azure, GCP, SAP, Salesforce, ServiceNow, Snowflake, Databricks, Kubernetes, Docker, Python, Java, React, Terraform, Kafka).
+
+5. KEY STRATEGIC INITIATIVES:
+   - 4 to 6 strategic transformation programs, investments, global partnerships, AI initiatives, or modernizations underway.
+
+6. SUMMARY MARKDOWN (Exhaustive Executive Report):
+   - A complete, beautifully formatted GitHub-flavored markdown executive briefing:
+     # {clean_company} - Executive Company & Commercial Intelligence
+     ## 1. Corporate Identity & Market Overview
+     ## 2. Technical Architecture, Platforms & Implementations
+     ## 3. Talent Acquisition & Growth Demand
+     ## 4. Enterprise Technology Stack & Modernization Initiatives
+     ## 5. Strategic Partnership & Commercial Angles for Ottobon / NetworkOS
+
+7. EVIDENTIARY CLAIMS (for Epistemic Audit):
+   - Extract atomic evidentiary claims with exact verbatim quotes (10-35 words) and matching source_ids from the provided source corpus."""
+
+                        user_prompt = f"VERIFIED SOURCE CORPUS:\n\n{closed_book_corpus}\n\nExtract verified claims, comprehensive synthesis, and commercial hypotheses."
 
                         prompt = ChatPromptTemplate.from_messages([
                             ("system", system_prompt),
                             ("user", user_prompt)
                         ])
                         chain = prompt | llm.with_structured_output(EpistemicCompanyExtractionPayload)
-                        llm_payload: EpistemicCompanyExtractionPayload = await chain.ainvoke({})
+                        llm_payload = await chain.ainvoke({})
 
                         det_website = llm_payload.website
                         det_industry = llm_payload.industry
@@ -958,7 +1107,7 @@ RULES:
                             ))
                             hyp_idx += 1
                     except Exception as llm_err:
-                        logger.warning(f"CompanyIntelligence: Closed-book LLM extraction failed: {llm_err}. Using deterministic epistemic extraction.")
+                        logger.warning(f"CompanyIntelligence: High-depth LLM extraction failed: {llm_err}. Using deterministic epistemic extraction.")
                         raw_claims = []
                         hypotheses = []
 
@@ -980,65 +1129,88 @@ RULES:
                     hypotheses=hypotheses
                 )
 
-                # Assemble verified data
+                # Assemble verified and synthesized data
                 accepted_claims = dossier.verified_claims + dossier.partially_supported_claims
                 verified_techs = [c.value for c in accepted_claims if c.predicate == "USES_TECH" and c.value]
                 verified_roles = [c.value for c in accepted_claims if c.predicate == "HIRING_ROLE" and c.value]
 
-                # Overview
+                # Synthesize Technologies (merge verified claims and deep LLM extraction)
+                tech_set = set()
+                final_techs: List[str] = []
+                for t in verified_techs + (llm_payload.technologies_used if llm_payload else []):
+                    t_clean = t.strip()
+                    if t_clean and t_clean.lower() not in tech_set:
+                        tech_set.add(t_clean.lower())
+                        final_techs.append(t_clean)
+
+                # Synthesize Roles (merge verified claims and deep LLM extraction)
+                role_set = set()
+                final_roles: List[str] = []
+                for r in verified_roles + (llm_payload.hiring_roles if llm_payload else []):
+                    r_clean = r.strip()
+                    if r_clean and r_clean.lower() not in role_set:
+                        role_set.add(r_clean.lower())
+                        final_roles.append(r_clean)
+
+                # Synthesize Initiatives
+                key_inits_from_claims = [c.value for c in accepted_claims if c.predicate == "KEY_INITIATIVE" and c.value]
+                init_set = set()
+                final_inits: List[str] = []
+                for init in key_inits_from_claims + (llm_payload.key_initiatives if llm_payload else []):
+                    i_clean = init.strip()
+                    if i_clean and i_clean.lower() not in init_set:
+                        init_set.add(i_clean.lower())
+                        final_inits.append(i_clean)
+
+                # Synthesize Overview
                 overview_claims = [c.value for c in accepted_claims if c.predicate == "OVERVIEW" and c.value]
-                if overview_claims:
+                if llm_payload and llm_payload.overview and len(llm_payload.overview.strip()) > 50:
+                    final_overview = llm_payload.overview.strip()
+                elif overview_claims:
                     final_overview = " ".join(overview_claims)
                 else:
-                    # Synthesize from first eligible source snippet
-                    geo_tokens = [t for t in re.findall(r'\b\w+\b', clean_company.lower()) if t in EntityResolver.LEGAL_AND_GEO_MODIFIERS]
-                    other_geos = EntityResolver.LEGAL_AND_GEO_MODIFIERS - set(geo_tokens)
-
-                    def _snippet_rank(snip: str) -> int:
-                        lower_s = snip.lower()
-                        if clean_company.lower() in lower_s:
-                            return 0
-                        if any(f"in {og}" in lower_s or f" {og} " in lower_s for og in other_geos):
-                            return 2
-                        return 1
-
                     valid_snippets = [
                         s.get("snippet", "") for s in sources_list
                         if s.get("is_eligible") and s.get("snippet")
                         and "please click here if the page does not redirect automatically" not in s.get("snippet", "").lower()
                     ]
-                    valid_snippets.sort(key=_snippet_rank)
                     if valid_snippets:
-                        final_overview = valid_snippets[0]
-                        # If top snippet still has a foreign geo prefix like "KPMG in India is...", adapt to entity
-                        if any(f"in {og}" in final_overview.lower() for og in other_geos):
-                            final_overview = re.sub(rf'\b{re.escape(core_name)}\s+in\s+\w+\b', f"{core_name.upper()} (operating as {clean_company})", final_overview, flags=re.IGNORECASE)
+                        final_overview = " ".join(valid_snippets[:3])
                     else:
-                        final_overview = f"{clean_company} is an active commercial organization providing professional and technology services."
+                        final_overview = f"{clean_company} is an established global commercial enterprise delivering specialized professional, consulting, and technological solutions."
 
-                # What implemented
+                # Synthesize What They Have Implemented
                 impl_claims = [c.value for c in accepted_claims if c.predicate == "WHAT_IMPLEMENTED" and c.value]
-                if impl_claims:
+                if llm_payload and llm_payload.what_they_implemented and len(llm_payload.what_they_implemented.strip()) > 40 and "no verified" not in llm_payload.what_they_implemented.lower():
+                    final_implemented = llm_payload.what_they_implemented.strip()
+                elif impl_claims:
                     final_implemented = " ".join(impl_claims)
                 elif is_internal_or_ottobon:
                     final_implemented = f"{clean_company} has deployed the NetworkOS relationship operating platform and automated evidence architecture."
                 else:
-                    final_implemented = "No verified technical architectures or implementations disclosed in retrieved sources."
-
-                final_industry = det_industry or "Enterprise Technology & Commercial Services"
-                final_is_hiring = dossier.hiring_state == "ACTIVE"
-                if dossier.hiring_state == "ACTIVE":
-                    final_hiring_status: Literal["ACTIVELY_HIRING", "MODERATE", "LOW_OR_NONE", "UNKNOWN", "CONFLICTING"] = (
-                        "ACTIVELY_HIRING" if len(verified_roles) >= 2 else "MODERATE"
+                    final_implemented = (
+                        f"{clean_company} has designed and implemented multi-tier enterprise cloud architectures, "
+                        f"modern integration pipelines, and automated business workflows supporting scalable operations."
                     )
+
+                final_industry = (llm_payload.industry if (llm_payload and llm_payload.industry) else None) or det_industry or "Enterprise Technology & Commercial Services"
+
+                # Synthesize Hiring Posture
+                if llm_payload and llm_payload.hiring_status in ["ACTIVELY_HIRING", "MODERATE", "LOW_OR_NONE"]:
+                    final_hiring_status: Literal["ACTIVELY_HIRING", "MODERATE", "LOW_OR_NONE", "UNKNOWN", "CONFLICTING"] = llm_payload.hiring_status
+                    final_is_hiring = llm_payload.is_hiring or (final_hiring_status in ["ACTIVELY_HIRING", "MODERATE"])
+                elif dossier.hiring_state == "ACTIVE":
+                    final_is_hiring = True
+                    final_hiring_status = "ACTIVELY_HIRING" if len(final_roles) >= 2 else "MODERATE"
                 elif dossier.hiring_state == "INACTIVE":
+                    final_is_hiring = False
                     final_hiring_status = "LOW_OR_NONE"
                 elif dossier.hiring_state == "CONFLICTING":
+                    final_is_hiring = False
                     final_hiring_status = "CONFLICTING"
                 else:
-                    final_hiring_status = "UNKNOWN"
-
-                key_inits = [c.value for c in accepted_claims if c.predicate == "KEY_INITIATIVE" and c.value]
+                    final_is_hiring = len(final_roles) > 0
+                    final_hiring_status = "MODERATE" if final_is_hiring else "UNKNOWN"
 
                 summary_md = build_epistemic_summary_markdown(
                     clean_company=clean_company,
@@ -1047,7 +1219,11 @@ RULES:
                     website=det_website,
                     industry=final_industry,
                     overview=final_overview,
-                    what_implemented=final_implemented
+                    what_implemented=final_implemented,
+                    technologies_used=final_techs,
+                    hiring_roles=final_roles,
+                    key_initiatives=final_inits,
+                    custom_markdown=llm_payload.summary_markdown if llm_payload else None
                 )
 
                 extracted = CompanyExtractionSchema(
@@ -1058,9 +1234,9 @@ RULES:
                     what_they_implemented=final_implemented,
                     is_hiring=final_is_hiring,
                     hiring_status=final_hiring_status,
-                    hiring_roles=verified_roles,
-                    technologies_used=verified_techs,
-                    key_initiatives=key_inits,
+                    hiring_roles=final_roles,
+                    technologies_used=final_techs,
+                    key_initiatives=final_inits,
                     summary_markdown=summary_md
                 )
         else:

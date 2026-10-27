@@ -75,6 +75,26 @@ async def create_research_job(
     else:
         contact = None
 
+    # Fallback: check if an existing Contact has this URL or slug
+    slug = normalized_url.rstrip("/").split("/in/")[-1].split("?")[0].strip("/")
+    if not contact and slug:
+        c_stmt = select(Contact).where(
+            Contact.organization_id == org_id,
+            (Contact.profile_url == normalized_url) | (Contact.profile_url.ilike(f"%{slug}%"))
+        )
+        contact = (await db.execute(c_stmt)).scalars().first()
+        if contact:
+            if not identity:
+                identity = ExternalIdentity(
+                    id=str(uuid.uuid4()),
+                    contact_id=contact.id,
+                    provider="linkedin",
+                    identifier_type="profile_url",
+                    identifier=normalized_url
+                )
+                db.add(identity)
+                await db.flush()
+
     extracted_name = extract_name_from_slug(normalized_url)
 
     # 2. If contact doesn't exist, create it

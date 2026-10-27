@@ -683,25 +683,62 @@ class EvidenceEngine:
             )
 
             # Check individual search hits for exact LinkedIn profile match
-            if r.extracted_data and isinstance(r.extracted_data, dict) and "results" in r.extracted_data:
-                hits = r.extracted_data.get("results") or []
+            hits = []
+            if r.extracted_data and isinstance(r.extracted_data, dict):
+                if isinstance(r.extracted_data.get("results"), list):
+                    hits = r.extracted_data.get("results")
+                elif isinstance(r.extracted_data.get("items"), list):
+                    hits = r.extracted_data.get("items")
+                elif isinstance(r.extracted_data.get("raw_data"), dict):
+                    raw = r.extracted_data.get("raw_data")
+                    if isinstance(raw.get("results"), list):
+                        hits = raw.get("results")
+                    elif isinstance(raw.get("items"), list):
+                        hits = raw.get("items")
+                    elif isinstance(raw.get("organic"), list):
+                        hits = raw.get("organic")
+
+            if hits:
                 target_slug = EntityResolver._extract_linkedin_slug(executive_anchor.profile_url)
                 for h in hits:
-                    h_url = h.get("href") or ""
+                    h_url = h.get("href") or h.get("link") or h.get("url") or ""
                     h_slug = EntityResolver._extract_linkedin_slug(h_url)
-                    if (target_slug and h_slug and target_slug == h_slug) or (
-                        "linkedin.com/in/" in h_url.lower() and executive_anchor.full_name.lower() in (h.get("title") or "").lower()
-                    ):
+                    h_title = h.get("title") or ""
+                    h_body = h.get("body") or h.get("snippet") or h.get("description") or ""
+
+                    is_exact_slug = bool(target_slug and h_slug and target_slug.lower() == h_slug.lower())
+                    is_profile_match = bool(not target_slug and "linkedin.com/in/" in h_url.lower() and executive_anchor.full_name.lower() in h_title.lower())
+
+                    if is_exact_slug or is_profile_match:
                         cand_url = h_url
-                        cand_title = h.get("title") or cand_title
-                        cand_text = f"{h.get('title', '')}\n{h.get('body', '')}"
+                        cand_title = h_title
+                        cand_text = f"{h_title}\n{h_body}"
                         break
 
             cand_domain = EntityResolver._extract_domain(cand_url)
             r_meta = dict(r.metadata_ or {})
 
             if use_epistemic:
-                if r_meta.get("identity_match_status") == "CONFIRMED" and r_meta.get("identity_match_confidence", 0) >= 70:
+                # 0. Check for LinkedIn profile slug mismatch
+                target_slug = EntityResolver._extract_linkedin_slug(executive_anchor.profile_url)
+                cand_slug = EntityResolver._extract_linkedin_slug(cand_url)
+                slug_mismatch = bool(target_slug and cand_slug and target_slug != cand_slug)
+
+                if slug_mismatch:
+                    match_st = "UNCERTAIN"
+                    match_conf = 10
+                    r_meta["identity_match_status"] = "UNCERTAIN"
+                    r_meta["identity_match_confidence"] = 10
+                    r_meta["epistemic_resolution_status"] = "AMBIGUOUS"
+                    r_meta["is_eligible_for_factual_claims"] = False
+                    resolution = EntityResolutionResult(
+                        status="AMBIGUOUS",
+                        is_eligible_for_factual_claims=False,
+                        matched_anchors=[],
+                        conflict_flags=[f"Slug mismatch: target '{target_slug}' vs candidate '{cand_slug}'"],
+                        resolution_notes="Disqualified: Source points to a different LinkedIn profile"
+                    )
+                elif r_meta.get("identity_match_status") == "CONFIRMED" and r_meta.get("identity_match_confidence", 0) >= 70:
                     match_st = r_meta["identity_match_status"]
                     match_conf = r_meta["identity_match_confidence"]
                     r_meta["epistemic_resolution_status"] = "MATCH_CONFIRMED"
@@ -749,8 +786,8 @@ class EvidenceEngine:
                     r_meta["conflict_flags"] = resolution.conflict_flags
                 r.metadata_ = r_meta
 
-                # Auto-populate contact title & company from verified LinkedIn preview card if unpopulated
-                if contact and ("exact_linkedin_slug" in resolution.matched_anchors or "linkedin.com/in/" in cand_url.lower()):
+                # Auto-populate contact title & company from verified LinkedIn preview card if eligible
+                if contact and resolution.is_eligible_for_factual_claims and ("exact_linkedin_slug" in resolution.matched_anchors or "linkedin.com/in/" in cand_url.lower()):
                     import html
                     clean_t = html.unescape(cand_title)
                     clean_txt = html.unescape(cand_text)
@@ -759,32 +796,71 @@ class EvidenceEngine:
                     extracted_role = None
                     extracted_org = None
 
-                    # 1. Experience: <Org>
-                    exp_match = re.search(r'Experience:\s*([A-Za-z0-9\s&]{2,30})', clean_txt, flags=re.I)
-                    if exp_match:
-                        extracted_org = exp_match.group(1).split('|')[0].split('·')[0].strip()
+                    # 1. Check Headline/Title for "<Role> at <Company>" or "<Role> @ <Company>"
+                    # (Primary ground truth: LinkedIn headlines explicitly state the current active role & company)
+                    headline_candidate = clean_t
+                    if len(t_parts) >= 2:
+                        headline_candidate = t_parts[1]
 
-                    # 2. Organization match via "at / @"
+                    at_match = re.search(r'^(.*?)\s+(?:at|@|for)\s+([A-Za-z0-9\s&.,\'\-+]+)', headline_candidate, flags=re.I)
+                    if at_match:
+                        extracted_role = at_match.group(1).strip()
+                        extracted_org = at_match.group(2).strip()
+                    elif re.search(r'\s+(?:at|@|for)\s+', clean_t, flags=re.I):
+                        at_match2 = re.search(r'^(.*?)\s+(?:at|@|for)\s+([A-Za-z0-9\s&.,\'\-+]+)', clean_t, flags=re.I)
+                        if at_match2:
+                            extracted_role = at_match2.group(1).strip()
+                            extracted_org = at_match2.group(2).strip()
+
+                    # 2. Check Experience Section for active/current company ("Present" / "Current")
+                    # (e.g. "Argano · Present" or "Chief Operations Officer · Argano · 2022 - Present")
                     if not extracted_org:
-                        org_match = re.search(r'(?:at|@)\s+([A-Z][a-zA-Z0-9\s&]{2,30})', f"{clean_t} {clean_txt}")
-                        if org_match:
-                            extracted_org = org_match.group(1).strip()
+                        exp_present = re.search(
+                            r'(?:Experience|History)[\s\S]{0,100}?([A-Za-z0-9\s&.,\'\-+]{2,35})[\s\S]{0,60}?(?:Present|Current)',
+                            clean_txt,
+                            flags=re.I
+                        )
+                        if exp_present:
+                            extracted_org = exp_present.group(1).split('|')[0].split('·')[0].strip()
 
-                    # 3. Analyze title parts (e.g. Name - Company - Role OR Name - Role - Company)
-                    if len(t_parts) >= 3:
-                        extracted_role = t_parts[1].strip()
-                        extracted_org = t_parts[2].strip()
-                    elif len(t_parts) == 2:
-                        role_blob = t_parts[1].strip()
-                        if "," in role_blob:
-                            r_sub, o_sub = role_blob.split(",", 1)
-                            extracted_role = r_sub.strip()
+                    # 3. Fallback: Experience: <Org>
+                    if not extracted_org:
+                        exp_match = re.search(r'Experience:\s*([A-Za-z0-9\s&+]{2,30})', clean_txt, flags=re.I)
+                        if exp_match:
+                            extracted_org = exp_match.group(1).split('|')[0].split('·')[0].strip()
+
+                    # 4. Fallback: Analyze multi-part title (e.g. Name - Role - Company)
+                    if not extracted_role or not extracted_org:
+                        if len(t_parts) >= 3:
+                            if not extracted_role:
+                                extracted_role = t_parts[1].strip()
                             if not extracted_org:
-                                extracted_org = o_sub.split("|")[0].split("·")[0].strip()
-                        else:
-                            extracted_role = role_blob
+                                extracted_org = t_parts[2].strip()
+                        elif len(t_parts) == 2:
+                            role_blob = t_parts[1].strip()
+                            if "," in role_blob:
+                                r_sub, o_sub = role_blob.split(",", 1)
+                                if not extracted_role:
+                                    extracted_role = r_sub.strip()
+                                if not extracted_org:
+                                    extracted_org = o_sub.split("|")[0].split("·")[0].strip()
+                            elif not extracted_role:
+                                extracted_role = role_blob
 
-                    # Role vs Organization Semantic Disambiguation:
+                    # 5. If extracted_role still contains "at / @ / for <Company>", split cleanly
+                    if extracted_role and re.search(r'\s+(?:at|@|for)\s+', extracted_role, flags=re.I):
+                        r_part, o_part = re.split(r'\s+(?:at|@|for)\s+', extracted_role, maxsplit=1, flags=re.I)
+                        extracted_role = r_part.strip()
+                        if not extracted_org or extracted_org.lower() in {"pending research", "unknown", "n/a", "none"}:
+                            extracted_org = o_part.strip()
+
+                    # 6. Clean suffixes like "+ 1 more", "· ...", "| ..."
+                    if extracted_org:
+                        extracted_org = re.sub(r'\s*\+\s*\d+.*|\s*[·|].*', '', extracted_org).strip()
+                    if extracted_role:
+                        extracted_role = re.sub(r'\s*\+\s*\d+.*|\s*[·|].*', '', extracted_role).strip()
+
+                    # 7. Role vs Organization Semantic Disambiguation:
                     role_indicators = [
                         "executive", "manager", "director", "officer", "lead", "head", "chief", "vp", "president",
                         "engineer", "architect", "developer", "consultant", "analyst", "founder", "partner",
@@ -794,7 +870,9 @@ class EvidenceEngine:
                     org_indicators = [
                         "services", "technologies", "systems", "solutions", "corporation", "corp", "inc", "llc",
                         "ltd", "limited", "aws", "amazon", "google", "microsoft", "netrasemi", "ottobon", "cisco",
-                        "oracle", "ibm", "intel", "nvidia", "meta", "apple", "labs", "holdings"
+                        "oracle", "ibm", "intel", "nvidia", "meta", "apple", "labs", "holdings", "argano",
+                        "ey", "ey studio", "ernst & young", "deloitte", "pwc", "kpmg", "accenture", "mckinsey",
+                        "bcg", "bain", "tcs", "infosys", "wipro", "cognizant"
                     ]
                     is_role_org = bool(extracted_role and any(re.search(r'\b' + re.escape(oi) + r'\b', extracted_role.lower()) for oi in org_indicators))
                     is_org_role = bool(extracted_org and any(re.search(r'\b' + re.escape(ri) + r'\b', extracted_org.lower()) for ri in role_indicators))
@@ -804,10 +882,10 @@ class EvidenceEngine:
                     generic_roles = {"analyzing profile...", "professional", "unknown", "n/a", "none"}
                     generic_orgs = {"pending research", "unknown", "n/a", "none"}
 
-                    if extracted_role and (not contact.current_title or contact.current_title.lower() in generic_roles):
+                    if extracted_role and (not contact.current_title or contact.current_title.lower() in generic_roles or " at " in contact.current_title.lower() or " for " in contact.current_title.lower()):
                         contact.current_title = extracted_role
                         executive_anchor.current_title = extracted_role
-                    if extracted_org and (not contact.current_company or contact.current_company.lower() in generic_orgs):
+                    if extracted_org and extracted_org.lower() not in generic_orgs:
                         contact.current_company = extracted_org
                         executive_anchor.current_company = extracted_org
             else:
@@ -1489,17 +1567,46 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     cand_role = (clean_snapshot_dict.get("current_role") or "").strip()
                     cand_org = (clean_snapshot_dict.get("current_organization") or "").strip()
 
+                    # Clean "Role at/for Org" if LLM output combined role and org
+                    if cand_role and re.search(r'\s+(?:at|@|for)\s+', cand_role, flags=re.I):
+                        r_split, o_split = re.split(r'\s+(?:at|@|for)\s+', cand_role, maxsplit=1, flags=re.I)
+                        cand_role = r_split.strip()
+                        if not cand_org or cand_org.lower() in invalid_orgs:
+                            cand_org = o_split.strip()
+
+                    if cand_org:
+                        cand_org = re.sub(r'\s*\+\s*\d+.*|\s*[·|].*', '', cand_org).strip()
+                    if cand_role:
+                        cand_role = re.sub(r'\s*\+\s*\d+.*|\s*[·|].*', '', cand_role).strip()
+
                     if cand_role and cand_role.lower() not in invalid_roles:
-                        # Update title if missing, generic, or erroneously identical to the company name
-                        if not contact.current_title or contact.current_title.lower() in invalid_roles or (contact.current_company and contact.current_title.lower() == contact.current_company.lower()):
+                        # Update title if missing, generic, contains " at "/" for ", or erroneously identical to the company name
+                        if (
+                            not contact.current_title
+                            or contact.current_title.lower() in invalid_roles
+                            or " at " in contact.current_title.lower()
+                            or " for " in contact.current_title.lower()
+                            or (contact.current_company and contact.current_title.lower() == contact.current_company.lower())
+                        ):
                             contact.current_title = cand_role
 
                     if cand_org and cand_org.lower() not in invalid_orgs:
-                        # Update company if missing, generic, unverified, or was mistakenly set to a job title
+                        # Update company if missing, generic, unverified, was mistakenly set to a job title,
+                        # or if current_company differs from authoritative snapshot organization
                         role_keywords = ["executive", "manager", "director", "officer", "lead", "head", "specialist", "sales"]
                         is_current_co_role = any(re.search(r'\b' + rk + r'\b', (contact.current_company or "").lower()) for rk in role_keywords)
-                        if not contact.current_company or contact.current_company.lower() in invalid_orgs or is_current_co_role or (contact.current_title and contact.current_company.lower() == contact.current_title.lower()):
+                        co_lower = (contact.current_company or "").lower()
+
+                        if (
+                            not contact.current_company
+                            or co_lower in invalid_orgs
+                            or is_current_co_role
+                            or (contact.current_title and co_lower == contact.current_title.lower())
+                            or (co_lower != cand_org.lower() and (not contact.current_company or cand_org.lower() in (contact.current_title or "").lower() or co_lower not in (contact.current_title or "").lower()))
+                        ):
+                            old_co = contact.current_company
                             contact.current_company = cand_org
+                            logger.info(f"EvidenceEngine: Synchronized contact current_company from '{old_co}' to verified snapshot organization '{cand_org}'")
                     elif contact.current_company and contact.current_company.lower() in invalid_orgs:
                         contact.current_company = None
 
