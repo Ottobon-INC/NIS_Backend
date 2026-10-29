@@ -36,6 +36,10 @@ from app.services.research.research_verifier import (
     VerifiedResearchDossier,
     VerificationIssue,
 )
+from app.services.research.company_verifier import (
+    NON_COMPANY_BUZZWORDS,
+    KNOWN_ENTERPRISES,
+)
 
 logger = logging.getLogger("networkos")
 
@@ -110,6 +114,38 @@ class ExecutiveSnapshot(BaseModel):
     pipeline_stage: str = Field(default="PROPOSED", description="Stage: HYPOTHESIS, PROPOSED, VALIDATED, REJECTED, ON_HOLD, UNCERTAIN_IDENTITY")
     next_action_step: str = Field(description="Specific evidence-based research, approval, or outreach step")
 
+    # 6. Deep Person Footprint & Career Track Record
+    career_history: List[str] = Field(
+        default_factory=list,
+        description="Chronological list of past roles, previous organizations, and tenure (e.g. 'Senior Director at Microsoft (2018-2022)')"
+    )
+    notable_projects: List[str] = Field(
+        default_factory=list,
+        description="Major systems, technical architectures, platforms, or products they designed, built, or led"
+    )
+    summits_and_talks: List[str] = Field(
+        default_factory=list,
+        description="Conferences, summit keynotes, panel discussions, or podcast interviews"
+    )
+    publications_and_articles: List[str] = Field(
+        default_factory=list,
+        description="Authored articles, Substack/Medium posts, research papers, patents, or high-engagement LinkedIn posts"
+    )
+
+    # 7. Person Solver Capabilities & Superpowers Profile
+    domain_knowledge: str = Field(
+        default="",
+        description="In-depth analysis of their specialized industry, technical, and operational domain knowledge"
+    )
+    what_they_can_solve: List[str] = Field(
+        default_factory=list,
+        description="Specific operational bottlenecks, system migrations, or business challenges this person is equipped to solve for others"
+    )
+    core_strengths: List[str] = Field(
+        default_factory=list,
+        description="Distinct superpowers, craft masteries, and execution strengths they excel at"
+    )
+
     # Compatibility fields for existing UI components
     previous_roles: str = Field(default="", description="Summary of past roles")
     networkos_tier: str = Field(default="Tier 2", description="Tier 1 (Enterprise Decision Maker), Tier 2 (Domain Leader/Director), Tier 3 (Practitioner/Manager)")
@@ -128,6 +164,7 @@ class ExecutiveSnapshot(BaseModel):
     commercial_hypotheses: List[Dict[str, Any]] = Field(default_factory=list, description="List of explicitly segregated sales hypotheses")
     audit_issues: List[Dict[str, Any]] = Field(default_factory=list, description="Audit warnings and verification rejections")
     identity_resolution_status: str = Field(default="PROBABLE", description="CONFIRMED, PROBABLE, AMBIGUOUS, or UNMATCHED")
+
 
 
 # ============================================================================
@@ -625,6 +662,13 @@ class EvidenceEngine:
                 "relationship_path": "Unverified",
                 "pipeline_stage": "UNCERTAIN_IDENTITY",
                 "next_action_step": "Manual research and source verification required before outreach.",
+                "career_history": [],
+                "notable_projects": [],
+                "summits_and_talks": [],
+                "publications_and_articles": [],
+                "domain_knowledge": "Unverified",
+                "what_they_can_solve": [],
+                "core_strengths": [],
                 "full_markdown_report": (
                     f"# Commercial Opportunity Intelligence Report\n\n"
                     f"## 1. Executive & Domain Intelligence\n"
@@ -798,19 +842,23 @@ class EvidenceEngine:
 
                     # 1. Check Headline/Title for "<Role> at <Company>" or "<Role> @ <Company>"
                     # (Primary ground truth: LinkedIn headlines explicitly state the current active role & company)
-                    headline_candidate = clean_t
-                    if len(t_parts) >= 2:
-                        headline_candidate = t_parts[1]
+                    for cand_str in [clean_t] + t_parts:
+                        cand_sub = re.sub(r'^(?:' + re.escape(executive_anchor.full_name) + r')\s*[-–—:]\s*', '', cand_str, flags=re.I).strip()
+                        at_match = re.search(r'^(.*?)\s*(?:at|@|for)\s*([^|·•/–—\-]+)', cand_sub, flags=re.I)
+                        if at_match:
+                            r_cand = at_match.group(1).strip()
+                            o_cand = at_match.group(2).strip()
+                            if r_cand.lower() not in NON_COMPANY_BUZZWORDS:
+                                extracted_role = r_cand
+                                extracted_org = o_cand
+                                break
 
-                    at_match = re.search(r'^(.*?)\s+(?:at|@|for)\s+([A-Za-z0-9\s&.,\'\-+]+)', headline_candidate, flags=re.I)
-                    if at_match:
-                        extracted_role = at_match.group(1).strip()
-                        extracted_org = at_match.group(2).strip()
-                    elif re.search(r'\s+(?:at|@|for)\s+', clean_t, flags=re.I):
-                        at_match2 = re.search(r'^(.*?)\s+(?:at|@|for)\s+([A-Za-z0-9\s&.,\'\-+]+)', clean_t, flags=re.I)
-                        if at_match2:
-                            extracted_role = at_match2.group(1).strip()
-                            extracted_org = at_match2.group(2).strip()
+                    # Check segments against verified global enterprises (e.g. Wipro, Google, Microsoft, Accenture)
+                    if not extracted_org:
+                        for p in t_parts:
+                            if p.lower() in KNOWN_ENTERPRISES:
+                                extracted_org = p.strip()
+                                break
 
                     # 2. Check Experience Section for active/current company ("Present" / "Current")
                     # (e.g. "Argano · Present" or "Chief Operations Officer · Argano · 2022 - Present")
@@ -1152,6 +1200,21 @@ CRITICAL EVIDENCE-GROUNDING & PROBLEM IDENTIFICATION PRINCIPLES:
    - Pipeline stage MUST be 'PROPOSED' or 'HYPOTHESIS' (or 'UNCERTAIN_IDENTITY' if identity is unconfirmed). Never output 'QUALIFIED' or 'VALIDATED'.
    - Any pricing ($10k-$20k), effort, or rate card numbers are unverified internal assumptions. Explicitly label them as assumptions.
 
+5. SOLVER PROFILE & PERSON SUPERPOWERS (X → Y SOLVABILITY):
+   - In NetworkOS, we don't just assess what problems candidates have; we also assess what problems THEY CAN SOLVE for others.
+   - For every candidate, synthesize:
+     * domain_knowledge: Deep synthesis of the specific industry, system architectures, and technical domains they master.
+     * what_they_can_solve: Concrete operational, architectural, or business challenges this person is equipped to solve for others based on their track record (e.g. 'Distributed stream processing bottlenecks', 'Enterprise billing migrations', 'Zero-trust IAM rollouts').
+     * core_strengths: What makes them exceptional? Their execution superpowers, technical craft masteries, or domain execution instincts.
+   - Deep Person Footprint:
+     * career_history: Chronological past roles, previous organizations, and tenures.
+     * notable_projects: Specific systems, platforms, or products built or architected.
+     * summits_and_talks: Conferences, keynotes, panels, podcast interviews, or technical talks.
+     * publications_and_articles: Authored articles, Substack/Medium posts, research papers, patents, or insightful LinkedIn posts.
+   - ZERO-HALLUCINATION ENFORCEMENT:
+     * If no evidence is found for talks, publications, or projects, keep those fields as empty lists ([]).
+     * NEVER invent an employer, conference, paper, or system. State 'None observed in public records' if absent.
+
 You MUST populate the `full_markdown_report` field using this EXACT format:
 
 # Commercial Opportunity Intelligence Report
@@ -1205,6 +1268,21 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
   1. Internal validation of delivery capacity and domain scope.
   2. Founder review and sign-off on commercial assumptions before any outreach.
   3. Discovery questions to validate domain need.
+
+## 6. Person Solver Capabilities & Superpowers
+*Answering: What can this person uniquely solve for others, and what are their superpowers?*
+- **Domain Knowledge**: [Comprehensive domain understanding citing `[E#]`]
+- **What Can They Solve**:
+  - [Specific operational, architectural, or domain challenge they can solve]
+- **Core Strengths & Superpowers**:
+  - [Core execution strength or craft mastery]
+
+## 7. Public Footprint & Track Record
+*Answering: What is their career journey, notable builds, and public presence?*
+- **Career History**: [Past roles and organizations with tenure, or "None observed in public records"]
+- **Notable Systems & Projects**: [Projects, platforms, or systems architected/built, or "None observed in public records"]
+- **Summits, Talks & Podcasts**: [Speaking engagements and talks, or "None observed in public records"]
+- **Publications & Writings**: [Published articles, whitepapers, or posts, or "None observed in public records"]
 """
 
                 user_prompt_text = (
@@ -1217,6 +1295,9 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     "Synthesize commercial opportunity intelligence and generate the deep-dive report based on the candidate's verified role, organization, and evidence.\n"
                     "- If the evidence directly states an explicit operational challenge, classify problem_epistemic_status as 'EVIDENCE_GROUNDED'.\n"
                     "- If the evidence does not state a failure explicitly, but the candidate's active executive role, company domain, technology architecture, and growth demand clearly indicate a genuine operational challenge in their domain, classify it as 'SUPPORTED_INFERENCE'. Synthesize a grounded, non-hallucinated 'broad_business_problem' and tightly scoped 'smallest_solvable_problem' (4-week pilot angle) based on their role and organization.\n"
+                    "- Extract their verifiable public footprint (career_history, notable_projects, summits_and_talks, publications_and_articles). If none found in evidence, leave as empty list [].\n"
+                    "- Synthesize their Solver Profile (domain_knowledge, what_they_can_solve, core_strengths) representing their technical and execution superpowers.\n"
+                    "- Synthesize a concise, informative 2-3 sentence executive bio in 'who_they_are' summarizing who this professional is, their verified current role, current organization, and primary domain focus based on evidence.\n"
                     "- Only if the candidate identity or role is completely unverified or ambiguous, classify it as 'INSUFFICIENT_EVIDENCE' or 'NO_OBSERVED_PROBLEM'."
                 )
 
@@ -1261,6 +1342,13 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     "relationship_path": "Unverified",
                     "pipeline_stage": "PROPOSED",
                     "next_action_step": "Conduct manual identity verification and opportunity review.",
+                    "career_history": [],
+                    "notable_projects": [],
+                    "summits_and_talks": [],
+                    "publications_and_articles": [],
+                    "domain_knowledge": "Unverified",
+                    "what_they_can_solve": [],
+                    "core_strengths": [],
                     "full_markdown_report": (
                         f"# Commercial Opportunity Intelligence Report\n\n"
                         f"## 1. Executive & Domain Intelligence\n"
@@ -1274,6 +1362,33 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                     ),
                     "sources_used": []
                 }
+
+            # ================================================================
+            # PUBLIC FOOTPRINT ENRICHMENT (Zero-hallucination post extraction)
+            # ================================================================
+            if not snapshot_dict.get("publications_and_articles"):
+                extracted_posts = []
+                for r in results:
+                    if r.query and "posts" in r.query.lower():
+                        raw = (r.extracted_data or {}).get("raw_data", {}) if isinstance(r.extracted_data, dict) else {}
+                        res_list = raw.get("results", []) or raw.get("organic", []) or (r.extracted_data.get("results", []) if isinstance(r.extracted_data, dict) else [])
+                        for item in res_list:
+                            t = item.get("title") or ""
+                            href = item.get("href") or item.get("link") or item.get("url") or ""
+                            post_topic = None
+                            if href and "linkedin.com/posts/" in href:
+                                match_slug = re.search(r'posts/[^/]+_([a-zA-Z0-9\-]+)-activity', href)
+                                if match_slug:
+                                    post_topic = match_slug.group(1).replace("-", " ").title()
+                            cleaned_t = re.sub(r'^(?:[A-Za-z\s]+\'s Post|[A-Za-z\s]+ on LinkedIn)[\s:\-–—|]*', '', t, flags=re.I).strip()
+                            cleaned_t = re.sub(r'\s*[|–—\-]\s*(?:[A-Za-z\s]+|LinkedIn).*$', '', cleaned_t, flags=re.I).strip()
+                            display_title = post_topic or cleaned_t
+                            if display_title and len(display_title) > 3:
+                                post_entry = f"{display_title} (LinkedIn Post)"
+                                if post_entry not in extracted_posts:
+                                    extracted_posts.append(post_entry)
+                if extracted_posts:
+                    snapshot_dict["publications_and_articles"] = extracted_posts[:6]
 
             # ================================================================
             # CITATION VALIDATION & AUDIT
@@ -1588,13 +1703,15 @@ You MUST populate the `full_markdown_report` field using this EXACT format:
                         cand_role = re.sub(r'\s*\+\s*\d+.*|\s*[·|].*', '', cand_role).strip()
 
                     if cand_role and cand_role.lower() not in invalid_roles:
-                        # Update title if missing, generic, contains " at "/" for ", or erroneously identical to the company name
+                        # Update title to authoritative synthesized role from evidence
                         if (
                             not contact.current_title
                             or contact.current_title.lower() in invalid_roles
+                            or contact.current_title.lower() in NON_COMPANY_BUZZWORDS
                             or " at " in contact.current_title.lower()
                             or " for " in contact.current_title.lower()
                             or (contact.current_company and contact.current_title.lower() == contact.current_company.lower())
+                            or (cand_role and cand_role.lower() != (contact.current_title or "").lower())
                         ):
                             contact.current_title = cand_role
 

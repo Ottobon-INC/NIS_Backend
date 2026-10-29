@@ -76,38 +76,87 @@ class SearchDiscoveryAdapter(DiscoveryAdapter):
         clean_name = re.sub(r'\b[0-9a-f]{6,}\b', '', name).strip()
         clean_name = re.sub(r'\s+', ' ', clean_name)
 
-        queries = []
-        # Priority 1: Exact LinkedIn profile slug match on site:linkedin.com/in/
-        # This is the single highest precision query for Google/Serper to return the EXACT profile card
+        tasks: List[Dict[str, Any]] = []
+
+        # -------------------------------------------------------------
+        # Angle 1: Identity & Professional Anchor
+        # -------------------------------------------------------------
         if slug and re.match(r'^[a-zA-Z0-9\-]{3,60}$', slug) and slug.lower() not in ["in", "pub", "profile"]:
-            queries.append(f"site:linkedin.com/in/{slug}")
-            queries.append(f'"{clean_name}" {slug}')
+            id_query = f"site:linkedin.com/in/{slug}"
+        elif company:
+            id_query = f'"{clean_name}" "{company}" linkedin'
+        else:
+            id_query = f'"{clean_name}" linkedin'
 
-        # Priority 2: Exact Name + Company (if company is known)
-        if company:
-            queries.append(f'"{clean_name}" "{company}"')
+        tasks.append({
+            "target_url": id_query,
+            "query": id_query,
+            "angle": "IDENTITY",
+            "search_terms": [clean_name],
+            "entity_identifiers": [clean_name]
+        })
 
-        # Priority 3: Exact Name + LinkedIn
-        queries.append(f'"{clean_name}" linkedin')
+        # -------------------------------------------------------------
+        # Angle 2: Career History & Past Experiences (Ex-companies, formerly at)
+        # -------------------------------------------------------------
+        career_query = f'"{clean_name}" ("formerly at" OR "previous role" OR "worked at" OR "career" OR "experience" OR "ex-")'
+        tasks.append({
+            "target_url": career_query,
+            "query": career_query,
+            "angle": "CAREER_HISTORY",
+            "search_terms": [clean_name, "career"],
+            "entity_identifiers": [clean_name]
+        })
 
-        # Priority 4: Exact Name + professional leadership signals
-        queries.append(f'"{clean_name}" (executive OR director OR officer OR founder OR leader OR engineer OR "product manager")')
-        queries.append(f'"{clean_name}"')
+        # -------------------------------------------------------------
+        # Angle 3: Technical Projects & Architectures Built
+        # -------------------------------------------------------------
+        projects_query = f'"{clean_name}" ("built" OR "architected" OR "developed" OR "system" OR "platform" OR "lead engineer")'
+        tasks.append({
+            "target_url": projects_query,
+            "query": projects_query,
+            "angle": "PROJECTS_BUILT",
+            "search_terms": [clean_name, "projects"],
+            "entity_identifiers": [clean_name]
+        })
 
-        # Deduplicate while preserving order
-        unique_queries = []
-        for q in queries:
-            if q not in unique_queries:
-                unique_queries.append(q)
+        # -------------------------------------------------------------
+        # Angle 4: Summits, Conferences, Keynotes & Podcasts
+        # -------------------------------------------------------------
+        talks_query = f'"{clean_name}" ("speaker" OR "summit" OR "keynote" OR "conference" OR "podcast" OR "interview")'
+        tasks.append({
+            "target_url": talks_query,
+            "query": talks_query,
+            "angle": "SUMMITS_AND_TALKS",
+            "search_terms": [clean_name, "speaker"],
+            "entity_identifiers": [clean_name]
+        })
 
-        tasks = []
-        for q in unique_queries[:3]:  # Top 3 most precise queries
-            tasks.append({
-                "target_url": q,
-                "query": q,
-                "search_terms": [name],
-                "entity_identifiers": [name]
-            })
+        # -------------------------------------------------------------
+        # Angle 5: Writings, Research, Articles & Substack
+        # -------------------------------------------------------------
+        writings_query = f'"{clean_name}" ("author" OR "article" OR "paper" OR "published" OR "substack" OR "medium" OR "patent")'
+        tasks.append({
+            "target_url": writings_query,
+            "query": writings_query,
+            "angle": "WRITINGS_AND_RESEARCH",
+            "search_terms": [clean_name, "publications"],
+            "entity_identifiers": [clean_name]
+        })
+
+        # -------------------------------------------------------------
+        # Angle 6: LinkedIn Posts & Pulse Articles
+        # -------------------------------------------------------------
+        posts_query = f'site:linkedin.com/posts/ "{clean_name}" OR site:linkedin.com/pulse/ "{clean_name}"'
+
+        tasks.append({
+            "target_url": posts_query,
+            "query": posts_query,
+            "angle": "POSTS_AND_ARTICLES",
+            "search_terms": [clean_name, "posts"],
+            "entity_identifiers": [clean_name]
+        })
+
         return tasks
 
 class GitHubDiscoveryAdapter(DiscoveryAdapter):

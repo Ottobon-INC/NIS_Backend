@@ -10,6 +10,12 @@ from app.services.research.research_verifier import (
     VerifiedResearchDossier,
     VerificationIssue,
 )
+from app.services.research.company_verifier import (
+    CompanyEntityVerifier,
+    VerifiedCompany,
+    KNOWN_ENTERPRISES,
+    NON_COMPANY_BUZZWORDS,
+)
 
 __all__ = [
     "EntityResolver",
@@ -20,4 +26,9 @@ __all__ = [
     "StoredSourceRecord",
     "VerifiedResearchDossier",
     "VerificationIssue",
+    "CompanyEntityVerifier",
+    "VerifiedCompany",
+    "KNOWN_ENTERPRISES",
+    "NON_COMPANY_BUZZWORDS",
 ]
+

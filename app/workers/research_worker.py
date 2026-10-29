@@ -95,7 +95,8 @@ async def execute_task(task_id: str):
                 metadata_={
                     "http_status": result.get("http_status"),
                     "content_type": result.get("content_type"),
-                    "error": result.get("error")
+                    "error": result.get("error"),
+                    "angle": target_meta.get("angle", "GENERAL")
                 }
             )
             db.add(sr)

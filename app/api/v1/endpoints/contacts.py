@@ -702,10 +702,39 @@ async def get_contact_360_data(
         "resolutionNotes": snapshot.get("resolution_notes") or f"Identity evaluated across {len(provider_diagnostics)} provider queries and verified profile anchors."
     }
 
+    # Ensure publications and articles are populated
+    effective_publications = list(snapshot.get("publications_and_articles") or [])
+    if not effective_publications and run_ids:
+        post_srs_stmt = select(SourceResult).where(
+            SourceResult.research_task_id.in_(
+                select(ResearchTask.id).where(ResearchTask.research_run_id.in_(run_ids))
+            ),
+            SourceResult.query.ilike("%posts%")
+        )
+        post_srs = (await db.execute(post_srs_stmt)).scalars().all()
+        for r in post_srs:
+            raw = (r.extracted_data or {}).get("raw_data", {}) if isinstance(r.extracted_data, dict) else {}
+            res_list = raw.get("results", []) or raw.get("organic", []) or (r.extracted_data.get("results", []) if isinstance(r.extracted_data, dict) else [])
+            for item in res_list:
+                t = item.get("title") or ""
+                href = item.get("href") or item.get("link") or item.get("url") or ""
+                post_topic = None
+                if href and "linkedin.com/posts/" in href:
+                    match_slug = re.search(r'posts/[^/]+_([a-zA-Z0-9\-]+)-activity', href)
+                    if match_slug:
+                        post_topic = match_slug.group(1).replace("-", " ").title()
+                cleaned_t = re.sub(r'^(?:[A-Za-z\s]+\'s Post|[A-Za-z\s]+ on LinkedIn)[\s:\-–—|]*', '', t, flags=re.I).strip()
+                cleaned_t = re.sub(r'\s*[|–—\-]\s*(?:[A-Za-z\s]+|LinkedIn).*$', '', cleaned_t, flags=re.I).strip()
+                display_title = post_topic or cleaned_t
+                if display_title and len(display_title) > 3:
+                    post_entry = f"{display_title} (LinkedIn Post)"
+                    if post_entry not in effective_publications:
+                        effective_publications.append(post_entry)
+
     return {
         "id": contact.id,
         "name": contact.full_name or snapshot.get("name", "Unknown"),
-        "title": (contact.current_title if contact.current_title not in ["Analyzing profile...", "Unknown", ""] else None) or (snapshot.get("current_role") if snapshot.get("current_role") not in ["Analyzing profile...", "Unknown", ""] else None) or "Professional",
+        "title": (snapshot.get("current_role") if snapshot.get("current_role") and snapshot.get("current_role") not in ["Analyzing profile...", "Unknown", "", "None"] else None) or (contact.current_title if contact.current_title not in ["Analyzing profile...", "Unknown", ""] else None) or "Professional",
         "company": contact.current_company or snapshot.get("current_organization", "Unknown"),
         "location": contact.location or snapshot.get("location", "Unknown"),
         "founder_reviewed": bool(contact.founder_reviewed),
@@ -715,9 +744,21 @@ async def get_contact_360_data(
         "linkedinUrl": contact.profile_url or snapshot.get("profile_url", ""),
         "tier": snapshot.get("networkos_tier", "Tier 3"),
         "personIntelligence": {
-            "background": snapshot.get("who_they_are", "No background found."),
+            "background": (
+                snapshot.get("who_they_are")
+                or snapshot.get("domain_knowledge")
+                or snapshot.get("proven_domain_expertise")
+                or (f"{contact.full_name or 'This professional'} is an active {contact.current_title or 'practitioner'} at {contact.current_company or 'their organization'}." if contact.current_company else "No background found.")
+            ),
             "expertise": [snapshot.get("technical_background", "None")],
-            "decisionInfluence": snapshot.get("primary_professional_areas", "Unknown")
+            "decisionInfluence": snapshot.get("primary_professional_areas", "Unknown"),
+            "domainKnowledge": snapshot.get("domain_knowledge") or snapshot.get("proven_domain_expertise", ""),
+            "whatTheyCanSolve": snapshot.get("what_they_can_solve", []),
+            "coreStrengths": snapshot.get("core_strengths", []),
+            "careerHistory": snapshot.get("career_history", []),
+            "notableProjects": snapshot.get("notable_projects", []),
+            "summitsAndTalks": snapshot.get("summits_and_talks", []),
+            "publicationsAndArticles": effective_publications[:6]
         },
         "companyIntelligence": {
             "industry": snapshot.get("happening_around_them", "Unknown"),
@@ -773,6 +814,13 @@ async def get_contact_360_data(
             "audit_issues": snapshot.get("audit_issues", []),
             "domainName": snapshot.get("domain_name", ""),
             "provenDomainExpertise": snapshot.get("proven_domain_expertise", ""),
+            "domainKnowledge": snapshot.get("domain_knowledge") or snapshot.get("proven_domain_expertise", ""),
+            "whatTheyCanSolve": snapshot.get("what_they_can_solve", []),
+            "coreStrengths": snapshot.get("core_strengths", []),
+            "careerHistory": snapshot.get("career_history", []),
+            "notableProjects": snapshot.get("notable_projects", []),
+            "summitsAndTalks": snapshot.get("summits_and_talks", []),
+            "publicationsAndArticles": snapshot.get("publications_and_articles", []),
             "isDomainSme": snapshot.get("is_domain_sme", ""),
             "opportunityCategory": snapshot.get("opportunity_category", ""),
             "broadBusinessProblem": snapshot.get("broad_business_problem") or None,

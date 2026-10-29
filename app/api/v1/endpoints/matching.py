@@ -233,3 +233,19 @@ async def semantic_match_connection(
         connection_title=title,
         context={"industry": snapshot.get("domain_name") or (contact.current_company if contact else "")}
     )
+
+
+@router.get("/problems-board")
+async def get_problems_and_solvers_board(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns an aggregated list of all researched people who have identified problems,
+    along with their details and two solvable paths:
+    1. Ottobon internal capability match & proposed pilot sprint.
+    2. Existing network connections who are equipped to solve it based on their
+       verified track record, role, and solver superpowers profile.
+    """
+    from app.services.problem_solver_aggregator import ProblemSolverAggregatorService
+    return await ProblemSolverAggregatorService.get_problems_and_solvers_board(db)
+

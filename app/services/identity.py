@@ -341,6 +341,23 @@ class IdentityResolver:
                     "observed_date": None
                 })
 
+            # Run deterministic CompanyEntityVerifier on headline and snippet to verify authentic companies
+            try:
+                from app.services.research.company_verifier import CompanyEntityVerifier
+                verified_comps = CompanyEntityVerifier.extract_and_verify_career_history([title_text, meta_desc])
+                for vc in verified_comps:
+                    comp_conf = 95 if vc.verification_tier in ["TIER_1_GLOBAL", "TIER_2_DATABASE"] else 80
+                    claims.append({
+                        "claim_type": "CAREER_HISTORY",
+                        "claim_value": f"Verified Career Affiliation: {vc.name} ({vc.tenure_type})",
+                        "confidence": comp_conf if match_status == "CONFIRMED" else min(comp_conf, 75),
+                        "excerpt": f"Company '{vc.name}' verified via {vc.verification_tier}. Mention: '{vc.raw_mention}' in headline context: '{vc.source_context}'",
+                        "observed_date": None
+                    })
+            except Exception as cv_err:
+                logger.warning(f"CompanyEntityVerifier error in IdentityResolver: {cv_err}")
+
+
         # ==========================================================
         # 2. PERSIST ATOMIC EVIDENCE RECORDS
         # ==========================================================
