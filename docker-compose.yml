@@ -23,7 +23,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - .:/app
+      - ./app:/app/app
     restart: unless-stopped
 
   job-scheduler:
@@ -48,7 +48,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - .:/app
+      - ./app:/app/app
     restart: unless-stopped
 
   db:
