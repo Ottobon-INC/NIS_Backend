@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import computed_field
 
@@ -20,12 +21,14 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
-        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        safe_pass = urllib.parse.quote_plus(urllib.parse.unquote(self.POSTGRES_PASSWORD))
+        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{safe_pass}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
     
     @computed_field
     @property
     def SQLALCHEMY_SYNC_DATABASE_URI(self) -> str:
-        return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        safe_pass = urllib.parse.quote_plus(urllib.parse.unquote(self.POSTGRES_PASSWORD))
+        return f"postgresql://{self.POSTGRES_USER}:{safe_pass}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
