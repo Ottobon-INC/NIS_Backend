@@ -24,7 +24,7 @@ KNOWN_ENTERPRISES: Set[str] = {
     "mckinsey", "mckinsey & company", "bcg", "boston consulting group", "bain",
     "bain & company", "deloitte", "pwc", "pricewaterhousecoopers", "ey", "ernst & young",
     "kpmg", "accenture", "infosys", "tcs", "tata consultancy services", "wipro",
-    "cognizant", "capgemini", "hcltech", "hcl",
+    "cognizant", "capgemini", "hcltech", "hcl", "argano",
     
     # Financial Services & Banking
     "jpmorgan", "jpmorgan chase", "goldman sachs", "morgan stanley", "citigroup", "citi",
@@ -63,13 +63,16 @@ NON_COMPANY_BUZZWORDS: Set[str] = {
     "building the future", "transforming enterprise", "digital transformation",
     "growth hacker", "visionary", "thought leader", "problem solver",
     
-    # Standard Job Titles (when appearing standalone without company)
+    # Standard Job Titles & Role Fragments (when appearing standalone without company)
     "founder", "co-founder", "founding engineer", "ceo", "chief executive officer",
-    "cto", "chief technology officer", "coo", "chief operating officer", "cfo", "cmo", "cpo",
-    "vp", "vice president", "director", "senior director", "managing director",
-    "head of engineering", "head of product", "head of growth", "head of sales",
+    "cto", "chief technology officer", "coo", "chief operating officer", "chief operations officer",
+    "chief oper", "operations officer", "chief", "oper", "operating officer", "cfo", "cmo", "cpo", "cro",
+    "vp", "vice president", "president", "director", "senior director", "managing director",
+    "head of engineering", "head of product", "head of growth", "head of sales", "head of operations",
     "software engineer", "senior software engineer", "staff engineer", "principal engineer",
-    "product manager", "lead architect", "solutions architect", "engineering manager"
+    "product manager", "lead architect", "solutions architect", "engineering manager",
+    "recruitment specialist", "recruitment", "recruiter", "experienced recruitment",
+    "agentic ai engineer", "ai engineer", "data engineer", "solution consultant"
 }
 
 # Corporate legal and organizational indicators
@@ -131,13 +134,14 @@ class CompanyEntityVerifier:
         segments = [s.strip() for s in normalized.split('|') if s.strip()]
 
         for seg in segments:
-            # Check for '@ Company' pattern
-            at_matches = re.findall(r'@\s*([A-Za-z0-9\.\&\s\-\'\’]+)', seg)
+            # Check for 'at / @ / for / with Company' pattern (e.g. 'Chief Operations Officer at Argano')
+            at_matches = re.finditer(r'(?:\bat\b|@|\bfor\b|\bwith\b)\s+([A-Za-z0-9\.\&\s\-\'\’]{2,50})', seg, re.IGNORECASE)
             has_specific_match = False
 
             for m in at_matches:
-                cand = cls.clean_token(m)
-                if cand:
+                cand = cls.clean_token(m.group(1))
+                # Disqualify if candidate is merely another role or buzzword
+                if cand and cand.lower() not in NON_COMPANY_BUZZWORDS:
                     has_specific_match = True
                     candidates.append({
                         "raw_token": cand,
@@ -159,7 +163,7 @@ class CompanyEntityVerifier:
                     cand = cls.clean_token(sp)
                     # Strip any residual prefixes
                     cand = re.sub(r'^(?:ex[\-\s]|former(?:ly)?\s+(?:at\s+)?|previously\s+(?:at\s+)?)', '', cand, flags=re.IGNORECASE).strip()
-                    if cand:
+                    if cand and cand.lower() not in NON_COMPANY_BUZZWORDS:
                         has_specific_match = True
                         candidates.append({
                             "raw_token": cand,
@@ -171,17 +175,24 @@ class CompanyEntityVerifier:
             if not has_specific_match:
                 seg_cleaned = cls.clean_token(seg)
                 # Strip leading title/role keywords
-                cleaned_standalone = re.sub(r'^(?:founder|ceo|cto|coo|vp|director|head|lead)\s+(?:of|at|@)?\s*', '', seg_cleaned, flags=re.IGNORECASE).strip()
+                role_strip_regex = (
+                    r'^(?:chief\s+[\w\s]+officer|chief\s+\w+|vice\s+president|president|managing\s+director|'
+                    r'senior\s+director|director|founder|co-founder|ceo|cto|coo|cfo|cmo|cpo|cro|vp|'
+                    r'head\s+of\s+[\w\s]+|head|lead|senior\s+\w+|principal\s+\w+|engineer|consultant|'
+                    r'manager|specialist)\s*(?:of|at|@|for|with)?\s*'
+                )
+                cleaned_standalone = re.sub(role_strip_regex, '', seg_cleaned, flags=re.IGNORECASE).strip()
                 # Strip ex- prefix if present
                 is_past_seg = bool(re.search(r'\b(?:ex[\-\s]|former|previously)\b', cleaned_standalone, re.IGNORECASE))
                 cleaned_standalone = re.sub(r'^(?:ex[\-\s]|former(?:ly)?\s+(?:at\s+)?|previously\s+(?:at\s+)?)', '', cleaned_standalone, flags=re.IGNORECASE).strip()
 
                 if cleaned_standalone and 2 <= len(cleaned_standalone) <= 45:
-                    candidates.append({
-                        "raw_token": cleaned_standalone,
-                        "is_past": is_past_seg,
-                        "original_segment": seg
-                    })
+                    if cleaned_standalone.lower() not in NON_COMPANY_BUZZWORDS:
+                        candidates.append({
+                            "raw_token": cleaned_standalone,
+                            "is_past": is_past_seg,
+                            "original_segment": seg
+                        })
 
         return candidates
 
@@ -206,17 +217,21 @@ class CompanyEntityVerifier:
         if norm in NON_COMPANY_BUZZWORDS:
             return False, "REJECTED_BUZZWORD", cleaned
 
-        # Check if candidate is purely a role or title (e.g. "Senior Software Engineer")
-        if any(norm == bw or norm.startswith(f"{bw} ") or norm.endswith(f" {bw}") for bw in [
-            "engineer", "manager", "developer", "architect", "consultant", "analyst", "specialist"
-        ]) and not any(ind in norm.split() for ind in CORPORATE_INDICATORS):
+        # Check if candidate is purely a role or title (e.g. "Chief Operations Officer", "Chief Oper", "Senior Engineer")
+        role_tokens = [
+            "engineer", "manager", "developer", "architect", "consultant", "analyst", "specialist",
+            "officer", "chief", "oper", "operating", "operations", "executive", "director", "lead",
+            "head", "president", "vp", "coo", "ceo", "cto", "cfo", "recruitment", "recruiter",
+            "advisor", "fellow", "intern", "coordinator", "administrator", "associate", "practitioner"
+        ]
+        if any(norm == bw or norm.startswith(f"{bw} ") or norm.endswith(f" {bw}") or f" {bw} " in norm for bw in role_tokens) and not any(ind in norm.split() for ind in CORPORATE_INDICATORS):
             return False, "REJECTED_ROLE_TITLE", cleaned
 
         # Step 1: Tier 1 Global Enterprise Catalog
         if norm in KNOWN_ENTERPRISES:
             return True, "TIER_1_GLOBAL", cleaned.title()
 
-        # Check token match against Big Tech with prefix/suffix (e.g. "Google Cloud" -> Google)
+        # Check token match against Big Tech / Global Enterprise with prefix/suffix (e.g. "Google Cloud" -> Google)
         for ke in KNOWN_ENTERPRISES:
             if re.search(rf'\b{re.escape(ke)}\b', norm):
                 return True, "TIER_1_GLOBAL", cleaned.title()
@@ -236,10 +251,11 @@ class CompanyEntityVerifier:
             text_norm = supporting_text.lower()
             escaped_cand = re.escape(norm)
             patterns = [
-                rf'(?:worked\s+at|employed\s+at|engineer\s+at|lead\s+at|role\s+at|team\s+at)\s+{escaped_cand}\b',
-                rf'\b{escaped_cand}\s+(?:inc|corp|corporation|ltd|limited|llc|technologies|solutions|labs)\b',
-                rf'(?:founded|co-founded|started)\s+{escaped_cand}\b',
-                rf'\b{escaped_cand}\s+(?:headquarters|office|raised|acquired|announced|platform)\b',
+                rf'(?:worked\s+at|employed\s+at|engineer\s+at|lead\s+at|role\s+at|team\s+at|officer\s+at|director\s+at|vp\s+at|executive\s+at|president\s+at)\s+{escaped_cand}\b',
+                rf'\b{escaped_cand}\s+(?:inc|corp|corporation|ltd|limited|llc|technologies|solutions|labs|group|consulting)\b',
+                rf'(?:founded|co-founded|started|joined)\s+{escaped_cand}\b',
+                rf'\b{escaped_cand}\s+(?:headquarters|office|raised|acquired|announced|platform|is|provides|delivers)\b',
+                rf'(?:at|@)\s+{escaped_cand}\b',
             ]
             for pat in patterns:
                 if re.search(pat, text_norm):

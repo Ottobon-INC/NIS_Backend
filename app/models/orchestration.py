@@ -1,5 +1,8 @@
 import enum
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Enum, JSON
+from typing import Optional, Any, Dict
+from datetime import datetime
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Enum, JSON
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 from app.db.base import Base
 
@@ -23,27 +26,27 @@ class TaskStatus(str, enum.Enum):
 
 class ResearchRun(Base):
     __tablename__ = "research_runs"
-    id = Column(String, primary_key=True, index=True)
-    contact_id = Column(String, ForeignKey("contacts.id"), nullable=True)
-    status = Column(Enum(RunStatus), default=RunStatus.NOT_STARTED)
-    triggered_by = Column(String)
-    started_at = Column(DateTime(timezone=True))
-    completed_at = Column(DateTime(timezone=True))
-    error_message = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    contact_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("contacts.id"), nullable=True)
+    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.NOT_STARTED, nullable=False)
+    triggered_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
 class ResearchTask(Base):
     __tablename__ = "research_tasks"
-    id = Column(String, primary_key=True, index=True)
-    research_run_id = Column(String, ForeignKey("research_runs.id"))
-    source_id = Column(String, ForeignKey("research_sources.id"))
-    status = Column(Enum(TaskStatus), default=TaskStatus.PENDING)
-    priority = Column(String)
-    target_metadata = Column(JSON, nullable=True)
-    started_at = Column(DateTime(timezone=True))
-    completed_at = Column(DateTime(timezone=True))
-    error_message = Column(String)
-    retry_count = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    research_run_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("research_runs.id"), nullable=True)
+    source_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("research_sources.id"), nullable=True)
+    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.PENDING, nullable=False)
+    priority: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    target_metadata: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)

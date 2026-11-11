@@ -23,3 +23,4 @@ from app.models.introduction import IntroductionDraft, IntroStatus
 from app.models.company_intelligence import CompanyIntelligence
 from app.models.trusted_context import TrustedContext, TrustedContextType
 from app.models.scraped_job import ScrapedJob
+from app.models.evals import EvalRun

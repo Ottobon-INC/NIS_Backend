@@ -1,6 +1,11 @@
 from fastapi import Header, HTTPException, status
+from app.core.config import settings
 
 async def get_current_user(authorization: str = Header(default=None)):
+    # In development mode, allow seamless access even if headers are missing or using mock tokens
+    if settings.ENVIRONMENT == "development":
+        return {"user_id": "1", "role": "MEMBER", "organization_id": "org-1"}
+
     if not authorization or authorization not in ["Bearer mock-token", "Bearer mock-admin-token"]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -9,6 +14,9 @@ async def get_current_user(authorization: str = Header(default=None)):
     return {"user_id": "1", "role": "MEMBER", "organization_id": "org-1"}
 
 async def get_current_admin(authorization: str = Header(default=None)):
+    if settings.ENVIRONMENT == "development":
+        return {"user_id": "2", "role": "ADMIN", "organization_id": "org-1"}
+
     if not authorization or authorization != "Bearer mock-admin-token":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

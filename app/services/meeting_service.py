@@ -520,7 +520,7 @@ class MeetingService:
         class MeetingFindingsResult(BaseModel):
             findings: List[ExtractedFindingSchema] = Field(default_factory=list)
 
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=settings.OPENAI_API_KEY)
+        llm = ChatOpenAI(model=settings.OPENAI_MODEL, temperature=0.0, api_key=settings.OPENAI_API_KEY)
 
         system_prompt = """You are a rigorous meeting intelligence extraction engine for NetworkOS.
 Analyze the conversation transcript and extract:

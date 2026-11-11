@@ -84,7 +84,7 @@ def extract_name_from_linkedin_slug(url_or_slug: str) -> str:
             try:
                 from langchain_openai import ChatOpenAI
                 from app.core.config import settings
-                llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=settings.OPENAI_API_KEY)
+                llm = ChatOpenAI(model=settings.OPENAI_MODEL, temperature=0.0, api_key=settings.OPENAI_API_KEY)
                 res = llm.invoke(f"Segment this concatenated username into properly capitalized separate words (return ONLY the person name, nothing else): {single}").content.strip()
                 if res and len(res.split()) > 1:
                     return res

@@ -181,9 +181,33 @@ async def execute_research_run(run_id: str):
                             "unspecified", "not specified", "not provided", "tbd", "none", "n/a", "na", "null", ""
                         }
                         clean_co = (contact.current_company or "").strip()
+                        from app.services.research.company_verifier import CompanyEntityVerifier
+                        is_valid_co, _, norm_co = CompanyEntityVerifier.verify_company_entity(clean_co) if clean_co else (False, "UNVERIFIED", "")
+
+                        if is_valid_co:
+                            clean_co = norm_co
+                            contact.current_company = norm_co
+                        else:
+                            # Attempt recovery of verified organization from the synthesized executive snapshot
+                            sr_stmt = select(SourceResult).where(SourceResult.source_id == 'evidence_engine').order_by(SourceResult.retrieved_at.desc())
+                            all_srs = (await db.execute(sr_stmt)).scalars().all()
+                            for sr in all_srs:
+                                if sr.metadata_ and sr.metadata_.get("contact_id") == contact.id:
+                                    snap = (sr.extracted_data or {}).get("executive_snapshot", {})
+                                    snap_org = snap.get("current_organization")
+                                    if snap_org:
+                                        s_valid, _, s_norm = CompanyEntityVerifier.verify_company_entity(snap_org)
+                                        if s_valid:
+                                            clean_co = s_norm
+                                            contact.current_company = s_norm
+                                            logger.info(f"ResearchWorker: Recovered verified company '{s_norm}' from snapshot for Contact {contact.id}")
+                                            break
+                            if not is_valid_co and clean_co == (contact.current_company or "").strip():
+                                clean_co = ""
+
                         if clean_co and clean_co.lower() not in invalid_orgs:
                             try:
-                                logger.info(f"ResearchWorker: Auto-triggering Company Intelligence for '{clean_co}' (Contact ID: {contact.id})")
+                                logger.info(f"ResearchWorker: Auto-triggering Company Intelligence for verified company '{clean_co}' (Contact ID: {contact.id})")
                                 await CompanyIntelligenceService.extract_and_persist(
                                     db=db,
                                     company_name=clean_co,

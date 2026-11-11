@@ -1,5 +1,8 @@
 import enum
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum, Integer, Boolean, Date, Text
+from typing import Optional, Any, Dict
+from datetime import datetime, date
+from sqlalchemy import String, DateTime, ForeignKey, Enum, Integer, Boolean, Date, Text
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -27,38 +30,38 @@ class CardStatus(str, enum.Enum):
 class Contact(Base):
     __tablename__ = "contacts"
 
-    id = Column(String, primary_key=True, index=True)
-    organization_id = Column(String, index=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    organization_id: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
 
     # --- Role discriminator ---
     # TARGET = person being researched (VP John)
     # BHANU_CONNECTION = person from Bhanu's LinkedIn CSV
-    contact_type = Column(String, default=ContactType.TARGET, nullable=False, index=True)
+    contact_type: Mapped[str] = mapped_column(String, default=ContactType.TARGET, nullable=False, index=True)
 
     # --- Core identity (shared by both types) ---
-    first_name = Column(String)
-    last_name = Column(String)
-    full_name = Column(String)
-    current_title = Column(String)
-    current_company = Column(String)
-    company_website = Column(String)        # for TARGET: scraped company site
-    email = Column(String)
-    phone = Column(String)
-    location = Column(String)
-    profile_url = Column(String)            # LinkedIn URL (quick access; also in external_identities)
-    profile_image_url = Column(String)
+    first_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    current_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    current_company: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    company_website: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    location: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    profile_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    profile_image_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- Research pipeline status (TARGET only) ---
-    status = Column(Enum(ContactStatus), default=ContactStatus.NEW)
+    status: Mapped[ContactStatus] = mapped_column(Enum(ContactStatus), default=ContactStatus.NEW, nullable=False)
 
     # --- Intelligence card review (TARGET only) ---
     # Lifecycle: PROCESSING → DRAFT → REVIEWED → ACTIONABLE | ARCHIVED
-    card_status = Column(String, default=CardStatus.PROCESSING)
-    admin_notes = Column(Text)
-    reviewed_by = Column(String)            # admin user id who last reviewed
-    founder_reviewed = Column(Boolean, default=False)
-    founder_notes = Column(Text)
-    founder_reviewed_at = Column(DateTime(timezone=True))
+    card_status: Mapped[str] = mapped_column(String, default=CardStatus.PROCESSING, nullable=False)
+    admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    founder_reviewed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    founder_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    founder_reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # --- Route (TARGET only) ---
     # Stores the best matched route as JSONB — sufficient for V1 single-hop routing.
@@ -66,28 +69,28 @@ class Contact(Base):
     #          "via_name": "Priya Sharma", "via_title": "VP Ops",
     #          "via_company": "Global Logistics", "confidence": 0.85,
     #          "reasoning": "Works in same division as target" }
-    best_route = Column(JSONB)
+    best_route: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     # --- Bhanu's relationship context (BHANU_CONNECTION only) ---
     # 1=Met once, 2=Acquaintance, 3=Professional colleague,
     # 4=Trusted contact, 5=Close friend
-    relationship_strength = Column(Integer)             # 1–5
-    reachability = Column(String)                       # HIGH | MEDIUM | LOW | UNKNOWN
-    best_channel = Column(String)                       # EMAIL | LINKEDIN | WHATSAPP | PHONE
-    relationship_notes = Column(Text)                   # "Met at SAP Summit 2022"
-    connected_since = Column(Date)                      # "Connected On" from LinkedIn CSV
-    is_scored = Column(Boolean, default=False, index=True)  # has admin scored this yet?
-    import_batch_id = Column(String, index=True)        # which CSV upload session
+    relationship_strength: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reachability: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    best_channel: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    relationship_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    connected_since: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    is_scored: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False)
+    import_batch_id: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
 
 class ExternalIdentity(Base):
     __tablename__ = "external_identities"
-    id = Column(String, primary_key=True, index=True)
-    contact_id = Column(String, ForeignKey("contacts.id"))
-    provider = Column(String)
-    identifier_type = Column(String)
-    identifier = Column(String, unique=True, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    contact_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("contacts.id"), nullable=True)
+    provider: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    identifier_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    identifier: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)

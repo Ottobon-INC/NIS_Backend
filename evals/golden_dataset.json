@@ -1,0 +1,210 @@
+[
+  {
+    "case_id": "bench-01-positive-grounded-outage",
+    "category": "POSITIVE_GROUNDED",
+    "description": "Executive with verified LinkedIn + engineering blog citing database scaling bottlenecks",
+    "expected_badge_color": "green",
+    "min_expected_accuracy": 95.0,
+    "contact_name": "Arjun Mehta",
+    "contact_company": "StreamPulse",
+    "snapshot": {
+      "name": "Arjun Mehta",
+      "current_role": "VP Engineering",
+      "current_organization": "StreamPulse",
+      "provenance_status": "VERIFIED CURRENT",
+      "identity_confidence": 96.0,
+      "identity_resolution_status": "CONFIRMED",
+      "problem_epistemic_status": "EVIDENCE_GROUNDED",
+      "broad_business_problem": "High Kafka consumer lag and database bottleneck during peak ingestion",
+      "smallest_solvable_problem": "4-week streaming partition optimization and observability audit",
+      "ottobon_capability_match": "AI Applications & Data Engineering",
+      "delivery_risk_level": "LOW",
+      "estimated_effort_hours": "120-160 hours",
+      "cost_pricing_estimate": "$12,000 fixed-scope sprint",
+      "problem_evidence_references": ["[E1]", "[E2]"],
+      "structured_problem_references": [
+        {"citation_key": "[E1]", "supports_directly": true, "is_stale": false},
+        {"citation_key": "[E2]", "supports_directly": true, "is_stale": false}
+      ],
+      "evidence_map": {
+        "E1": {"identity_match_status": "CONFIRMED", "authority_tier": "PRIMARY_OFFICIAL", "claim": "VP Engineering at StreamPulse discussed Kafka ingestion latency bottlenecks", "excerpt": "Experiencing high Kafka consumer lag and p99 write bottlenecks on our telemetry cluster"},
+        "E2": {"identity_match_status": "CONFIRMED", "authority_tier": "PRIMARY_OFFICIAL", "claim": "StreamPulse Engineering Blog post on cluster capacity", "excerpt": "Database write bottleneck requires partitioning redesign"}
+      },
+      "sources_used": [
+        {"source_id": "company_blog", "status": "SUCCESS", "identity_match_status": "CONFIRMED", "identity_match_confidence": 96.0},
+        {"source_id": "linkedin", "status": "SUCCESS", "identity_match_status": "CONFIRMED", "identity_match_confidence": 95.0}
+      ],
+      "full_markdown_report": "Arjun Mehta serves as VP Engineering at StreamPulse [E1], where recent engineering posts highlight high Kafka consumer lag and write bottlenecks [E2]."
+    }
+  },
+  {
+    "case_id": "bench-02-positive-grounded-migration",
+    "category": "POSITIVE_GROUNDED",
+    "description": "CTO explicitly hiring for legacy monolith-to-microservices cloud migration",
+    "expected_badge_color": "green",
+    "min_expected_accuracy": 95.0,
+    "contact_name": "Elena Vance",
+    "contact_company": "FreightFlow",
+    "snapshot": {
+      "name": "Elena Vance",
+      "current_role": "Chief Technology Officer",
+      "current_organization": "FreightFlow",
+      "provenance_status": "VERIFIED CURRENT",
+      "identity_confidence": 94.0,
+      "identity_resolution_status": "CONFIRMED",
+      "problem_epistemic_status": "EVIDENCE_GROUNDED",
+      "broad_business_problem": "Deployment bottlenecks caused by legacy monolithic ERP service",
+      "smallest_solvable_problem": "4-week API boundary extraction & CI/CD acceleration sprint",
+      "ottobon_capability_match": "Software Development & Cloud Infrastructure",
+      "delivery_risk_level": "LOW",
+      "estimated_effort_hours": "140-180 hours",
+      "cost_pricing_estimate": "$15,000 fixed-scope sprint",
+      "problem_evidence_references": ["[E1]"],
+      "structured_problem_references": [
+        {"citation_key": "[E1]", "supports_directly": true, "is_stale": false}
+      ],
+      "evidence_map": {
+        "E1": {"identity_match_status": "CONFIRMED", "authority_tier": "PRIMARY_OFFICIAL", "claim": "CTO at FreightFlow cited legacy monolith deployment bottleneck", "excerpt": "Our legacy ERP monolith slows release cycles and creates deployment bottlenecks across logistics modules"}
+      },
+      "sources_used": [
+        {"source_id": "serper", "status": "SUCCESS", "identity_match_status": "CONFIRMED", "identity_match_confidence": 94.0}
+      ],
+      "full_markdown_report": "Elena Vance is CTO at FreightFlow [E1], actively addressing deployment bottlenecks in their legacy ERP monolith [E1]."
+    }
+  },
+  {
+    "case_id": "bench-03-negative-control-bio-only",
+    "category": "BIOGRAPHICAL_ONLY_CONTROL",
+    "description": "Executive profile with clean verified identity but no public operational problem; properly yields NO_OBSERVED_PROBLEM",
+    "expected_badge_color": "green",
+    "min_expected_accuracy": 95.0,
+    "contact_name": "Siddharth Rao",
+    "contact_company": "FinVault",
+    "snapshot": {
+      "name": "Siddharth Rao",
+      "current_role": "Head of Product",
+      "current_organization": "FinVault",
+      "provenance_status": "VERIFIED CURRENT",
+      "identity_confidence": 95.0,
+      "identity_resolution_status": "CONFIRMED",
+      "problem_epistemic_status": "NO_OBSERVED_PROBLEM",
+      "broad_business_problem": null,
+      "smallest_solvable_problem": null,
+      "ottobon_capability_match": "None Established",
+      "delivery_risk_level": "LOW",
+      "estimated_effort_hours": null,
+      "cost_pricing_estimate": null,
+      "problem_evidence_references": [],
+      "structured_problem_references": [],
+      "evidence_map": {
+        "E1": {"identity_match_status": "CONFIRMED", "authority_tier": "PRIMARY_OFFICIAL", "claim": "Siddharth Rao leads product strategy at FinVault", "excerpt": "Siddharth Rao is Head of Product at FinVault with prior PM leadership in payment gateways"}
+      },
+      "sources_used": [
+        {"source_id": "linkedin", "status": "SUCCESS", "identity_match_status": "CONFIRMED", "identity_match_confidence": 95.0}
+      ],
+      "full_markdown_report": "Siddharth Rao serves as Head of Product at FinVault [E1]. Public evidence confirms role and tenure without citing active operational deficiencies [E1]."
+    }
+  },
+  {
+    "case_id": "bench-04-supported-inference-scale",
+    "category": "SUPPORTED_INFERENCE",
+    "description": "Fast-growing SaaS VP Sales scaling multi-region outbound without automation",
+    "expected_badge_color": "amber",
+    "min_expected_accuracy": 80.0,
+    "contact_name": "Marcus Thorne",
+    "contact_company": "ClarityOps",
+    "snapshot": {
+      "name": "Marcus Thorne",
+      "current_role": "VP of Global Sales",
+      "current_organization": "ClarityOps",
+      "provenance_status": "VERIFIED CURRENT",
+      "identity_confidence": 85.0,
+      "identity_resolution_status": "PROBABLE",
+      "problem_epistemic_status": "SUPPORTED_INFERENCE",
+      "broad_business_problem": "Scaling outbound enterprise pipeline conversion during Series B regional expansion",
+      "smallest_solvable_problem": "4-week AI-assisted SDR lead enrichment and CRM routing workflow",
+      "ottobon_capability_match": "Sales Enablement & AI Applications",
+      "delivery_risk_level": "MEDIUM",
+      "estimated_effort_hours": "100-140 hours",
+      "cost_pricing_estimate": "$10,500 pilot engagement",
+      "problem_evidence_references": ["[E1]"],
+      "structured_problem_references": [
+        {"citation_key": "[E1]", "supports_directly": false, "is_stale": false}
+      ],
+      "evidence_map": {
+        "E1": {"identity_match_status": "PROBABLE", "authority_tier": "PRIMARY_OFFICIAL", "claim": "ClarityOps raised Series B and expanded sales leadership with Marcus Thorne", "excerpt": "Marcus Thorne joined ClarityOps as VP Global Sales following Series B announcement"}
+      },
+      "sources_used": [
+        {"source_id": "news", "status": "SUCCESS", "identity_match_status": "PROBABLE", "identity_match_confidence": 85.0}
+      ],
+      "full_markdown_report": "Marcus Thorne joined ClarityOps as VP of Global Sales following Series B growth [E1]."
+    }
+  },
+  {
+    "case_id": "bench-05-ambiguous-namesake-suppressed",
+    "category": "AMBIGUOUS_NAMESAKE_CONTROL",
+    "description": "Namesake ambiguity caught; identity UNVERIFIED and commercial pricing suppressed safely",
+    "expected_badge_color": "red",
+    "max_expected_accuracy": 79.9,
+    "contact_name": "Vikram Patel",
+    "contact_company": "Apex Health",
+    "snapshot": {
+      "name": "Vikram Patel",
+      "current_role": "Director of Engineering",
+      "current_organization": "Apex Logistics",
+      "provenance_status": "UNVERIFIED",
+      "pipeline_stage": "UNCERTAIN_IDENTITY",
+      "identity_confidence": 45.0,
+      "identity_resolution_status": "AMBIGUOUS",
+      "detected_conflicts": ["Retrieved profile belongs to Apex Logistics vs target Apex Health"],
+      "problem_epistemic_status": "INSUFFICIENT_EVIDENCE",
+      "broad_business_problem": null,
+      "smallest_solvable_problem": null,
+      "ottobon_capability_match": null,
+      "delivery_risk_level": "HIGH",
+      "estimated_effort_hours": "SUPPRESSED: Pending identity confirmation",
+      "cost_pricing_estimate": "SUPPRESSED: Identity confidence below 70%",
+      "problem_evidence_references": [],
+      "structured_problem_references": [],
+      "evidence_map": {
+        "E1": {"identity_match_status": "UNCERTAIN", "authority_tier": "UNVERIFIED_WEB", "claim": "Vikram Patel at Apex Logistics", "excerpt": "Vikram Patel Director at Apex Logistics"}
+      },
+      "sources_used": [
+        {"source_id": "serper", "status": "SUCCESS", "identity_match_status": "UNCERTAIN", "identity_match_confidence": 45.0}
+      ],
+      "full_markdown_report": "Retrieved records match Vikram Patel at Apex Logistics [E1], conflicting with target company Apex Health."
+    }
+  },
+  {
+    "case_id": "bench-06-fabricated-citation-stress",
+    "category": "FABRICATED_CITATION_STRESS",
+    "description": "Stress test containing phantom [E99] citation and unverified problem claim; verifies framework penalizes hallucinations",
+    "expected_badge_color": "red",
+    "max_expected_accuracy": 79.9,
+    "contact_name": "Neha Kapoor",
+    "contact_company": "CloudGrid",
+    "snapshot": {
+      "name": "Neha Kapoor",
+      "current_role": "Chief Information Officer",
+      "current_organization": "CloudGrid",
+      "provenance_status": "VERIFIED CURRENT",
+      "identity_confidence": 92.0,
+      "identity_resolution_status": "CONFIRMED",
+      "problem_epistemic_status": "EVIDENCE_GROUNDED",
+      "broad_business_problem": "Fabricated catastrophic outage in Q4",
+      "smallest_solvable_problem": "Infrastructure audit",
+      "ottobon_capability_match": "Cloud Infrastructure",
+      "delivery_risk_level": "LOW",
+      "problem_evidence_references": [],
+      "structured_problem_references": [],
+      "evidence_map": {
+        "E1": {"identity_match_status": "CONFIRMED", "authority_tier": "PRIMARY_OFFICIAL", "claim": "Neha Kapoor appointed CIO at CloudGrid", "excerpt": "Neha Kapoor is CIO at CloudGrid"}
+      },
+      "sources_used": [
+        {"source_id": "linkedin", "status": "SUCCESS", "identity_match_status": "CONFIRMED", "identity_match_confidence": 92.0}
+      ],
+      "full_markdown_report": "Neha Kapoor serves as CIO at CloudGrid [E1] and reportedly suffered a major outage [E99]."
+    }
+  }
+]
+

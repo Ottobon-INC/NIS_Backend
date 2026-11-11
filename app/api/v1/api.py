@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     matching,
     platform,
     trusted_context,
+    evals,
 )
 
 api_router = APIRouter()
@@ -42,4 +43,7 @@ api_router.include_router(matching.router, prefix="/matching", tags=["problem ma
 
 # Platform & Products
 api_router.include_router(platform.router, tags=["platform"])
+
+# AI Evaluations & Verification
+api_router.include_router(evals.router, prefix="/evals", tags=["ai evaluations"])
 

@@ -528,7 +528,7 @@ class SemanticProductMatcherService:
             )
 
         # 1. Immediate check: Vague or underspecified problem statements -> INSUFFICIENT_INFORMATION
-        if cls._is_vague_or_underspecified(clean_problem):
+        if cls._is_unverified_problem(clean_problem) or cls._is_vague_or_underspecified(clean_problem):
             return cls._build_insufficient_information_response(
                 problem_text=clean_problem,
                 connection_id=connection_id,
@@ -789,7 +789,7 @@ class SemanticProductMatcherService:
         from langchain_openai import ChatOpenAI
         from langchain_core.prompts import ChatPromptTemplate
 
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=settings.OPENAI_API_KEY)
+        llm = ChatOpenAI(model=settings.OPENAI_MODEL, temperature=0.0, api_key=settings.OPENAI_API_KEY)
 
         catalog_summary = "\n".join([
             f"- Product: {p['name']} ({p['category']})\n"

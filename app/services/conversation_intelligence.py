@@ -56,7 +56,7 @@ class ConversationIntelligenceService:
         from langchain_openai import ChatOpenAI
         from langchain_core.prompts import ChatPromptTemplate
 
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=settings.OPENAI_API_KEY)
+        llm = ChatOpenAI(model=settings.OPENAI_MODEL, temperature=0.0, api_key=settings.OPENAI_API_KEY)
 
         system_prompt = """You are a rigorous commercial opportunity intelligence analyst for NetworkOS.
 Your job is to extract business context and problems from the provided company profile document.

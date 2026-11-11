@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from app.models.identity import ContactStatus
 
@@ -43,6 +43,7 @@ class ContactOverviewSchema(BaseModel):
     card_status: Optional[str] = None
     founder_reviewed: Optional[bool] = False
     lastUpdated: str
+    evaluation_badge: Optional[Dict[str, Any]] = None
 
 class Contact360(BaseModel):
     contact: ContactInDB

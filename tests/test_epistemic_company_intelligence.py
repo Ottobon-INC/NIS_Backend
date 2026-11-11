@@ -88,7 +88,7 @@ async def test_authoritative_company_extraction(mock_db_session):
         assert "PostgreSQL" in result.technologies_used
         assert result.is_hiring is True
         assert result.hiring_status in ["ACTIVELY_HIRING", "MODERATE"]
-        assert "Backend Engineer" in result.hiring_roles
+        assert any("Backend Engineer" in (r if isinstance(r, str) else r.get("role_title", "")) for r in result.hiring_roles)
 
         # Ensure Section 5 explicitly contains commercial hypothesis label
         assert "## 5. Commercial Opportunity Hypotheses (Ottobon Internal - Unverified Projections)" in result.summary_markdown
