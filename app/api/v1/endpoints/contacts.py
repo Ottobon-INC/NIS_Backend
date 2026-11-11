@@ -540,6 +540,7 @@ async def get_contact_360_data(
     raw_verified = snapshot.get("verified_facts") or []
     verified_facts_list = []
     signals_context_list = []
+    conflicts_quarantined_list = []
 
     for vf in raw_verified:
         ev_refs = vf.get("evidence", [])
@@ -606,7 +607,6 @@ async def get_contact_360_data(
         }]
 
     # Conflicts & quarantined claims
-    conflicts_quarantined_list = []
     for issue in snapshot.get("audit_issues", []):
         conflicts_quarantined_list.append({
             "claimId": issue.get("claim_id"),
