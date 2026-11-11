@@ -5,9 +5,15 @@ from app.core.config import settings
 db_uri = settings.SQLALCHEMY_DATABASE_URI
 connect_args = {}
 
-if "db.czgaluszcaedowkqbzne.supabase.co" in settings.POSTGRES_SERVER:
+if "supabase" in settings.POSTGRES_SERVER or "supabase" in str(settings.SQLALCHEMY_DATABASE_URI):
     pw = urllib.parse.unquote(settings.POSTGRES_PASSWORD)
-    db_uri = f"postgresql+asyncpg://postgres.czgaluszcaedowkqbzne:{urllib.parse.quote_plus(pw)}@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres"
+    user = settings.POSTGRES_USER
+    if "." not in user:
+        user = f"{user}.czgaluszcaedowkqbzne"
+    host = settings.POSTGRES_SERVER
+    if "db.czgaluszcaedowkqbzne.supabase.co" in host:
+        host = "aws-0-ap-northeast-1.pooler.supabase.com"
+    db_uri = f"postgresql+asyncpg://{user}:{urllib.parse.quote_plus(pw)}@{host}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
     connect_args = {"ssl": "require"}
 
 engine = create_async_engine(
