@@ -85,8 +85,16 @@ CREATE INDEX ix_services_id ON services (id);
 
 CREATE TABLE products (
 	id VARCHAR NOT NULL,
-	name VARCHAR,
-	description TEXT,
+	name VARCHAR NOT NULL,
+	tagline VARCHAR,
+	category VARCHAR,
+	description TEXT NOT NULL,
+	features TEXT,
+	target_audience VARCHAR,
+	business_model VARCHAR,
+	status VARCHAR DEFAULT 'ACTIVE',
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+	updated_at TIMESTAMP WITH TIME ZONE,
 	PRIMARY KEY (id)
 );
 CREATE INDEX ix_products_id ON products (id);
