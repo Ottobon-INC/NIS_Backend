@@ -134,6 +134,13 @@ async def list_contacts(
     if contact_type:
         stmt = stmt.where(Contact.contact_type == contact_type)
 
+    # Exclude test fixtures at SQL level to prevent them from starving pagination limits
+    stmt = stmt.where(
+        Contact.id.not_like("test-%"),
+        Contact.id.not_like("contact-%"),
+        Contact.id.not_like("c-%")
+    )
+
     stmt = stmt.order_by(Contact.updated_at.desc(), Contact.created_at.desc()).offset(skip).limit(limit)
     res = await db.execute(stmt)
     contacts = res.scalars().all()
