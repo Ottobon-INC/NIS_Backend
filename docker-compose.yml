@@ -2,36 +2,46 @@ version: '3.8'
 
 services:
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "8080:8080"
-    volumes:
-      - .:/app
+      - "8001:8000"
     environment:
       - ENVIRONMENT=development
       - POSTGRES_SERVER=db
+      - POSTGRES_PORT=5432
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=networkos
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CORS_ORIGINS=*
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - SERPER_API_KEY=${SERPER_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
 
   job-scheduler:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: ["python", "-m", "app.workers.job_scraper_worker"]
-    volumes:
-      - .:/app
     environment:
       - ENVIRONMENT=development
       - POSTGRES_SERVER=db
+      - POSTGRES_PORT=5432
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=networkos
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - SERPER_API_KEY=${SERPER_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -42,28 +52,34 @@ services:
   db:
     image: postgres:15-alpine
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=networkos
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d networkos"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  redis_data:
